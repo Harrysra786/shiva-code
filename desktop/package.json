@@ -269,7 +269,7 @@
     "@deepseek-ai/dsh-workflow-worker-thread": "file:packages/harness-0.1.2-alpha.4/npm-dsh/deepseek-ai-dsh-workflow-worker-thread-0.1.2-alpha.4.tgz",
     "@deepseek-ai/dsh-workspace": "file:packages/harness-0.1.2-alpha.4/npm-dsh/deepseek-ai-dsh-workspace-0.1.2-alpha.4.tgz",
     "@deepseek-ai/schemastery": "file:packages/harness-0.1.2-alpha.4/npm-vendor/deepseek-ai-schemastery-3.18.2.tgz",
-    "dsh-better-sidebar": "file:packages/harness-0.1.2-alpha.4/npm-shiva-plugins/dsh-better-sidebar-0.15.2.tgz",
+    "dsh-better-sidebar": "file:packages/harness-0.1.2-alpha.4/npm-shiva-plugins/dsh-better-sidebar-0.15.3.tgz",
     "dsh-clock": "file:packages/harness-0.1.2-alpha.4/npm-shiva-plugins/dsh-clock-0.1.0.tgz",
     "dsh-desktop-client-ui": "file:packages/dsh-desktop-client-ui",
     "dsh-desktop-hmr-fallback": "file:packages/dsh-desktop-hmr-fallback",
