@@ -102,6 +102,13 @@
 
     - id: mds
       name: dsh-mds
+
+    # Kanban board over mds/epics/*/06-tickets/*.md: reads the ticket status
+    # frontmatter and moves cards active -> in_progress -> code_test ->
+    # human_test -> done. No VPS dependency, like dsh-mds itself.
+    - id: kanban
+      name: dsh-kanban
+
     - id: assets
       name: dsh-assets
     - id: 9router
