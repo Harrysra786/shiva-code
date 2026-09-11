@@ -16,10 +16,21 @@ Requires, all with `status: validated`: `01-brief.md`, `02-flows.md`, `03-protot
 
 Decide alone and just state: language, libraries, layout, naming, schema shape, test strategy, error style — anything reversible in an afternoon. **Bring to the requester, phrased as consequences** (with `ask_user_question`, one per question): anything that changes what they receive, what it costs to run, how long it takes, what happens to their data, or what they are locked into. Ask the reversal too: "if we're wrong in six months, how bad is it?" Cheap to reverse → decide; expensive → consider `/05-debate`.
 
+## Delivery, data and servers
+
+The workspace's connection tabs are the real mechanism for these, and the plan names them instead of hand-rolling:
+
+- **Deploy**: the **Railway** or **Vercel** tab (install the CLI, log in, link this workspace).
+- **Database / SQL / auth**: the **Supabase** tab.
+- **Repository / PR**: the **GitHub** tab.
+- **External VPS**: the `ssh_run`/`ssh_transfer` tools.
+
+Name which one the epic uses and the boundary it must not cross.
+
 ## Procedure
 
 1. `read` brief, flows, prototype.md, db-schema.json.
-2. **Ground truth**: inspect the actual code paths this change touches. A plan from assumption is the most expensive artifact there is.
+2. **Ground truth**: inspect the actual code paths this change touches. A plan from assumption is the most expensive artifact there is. Use `web_search`/`web_fetch` to confirm a library's current API and maintenance before choosing it.
 3. **Freeze the UX IDs**: every screen/state/action in prototype.md gets a stable id (`UX-<screen>-<n>`) used by tickets.
 4. **Frame technical forks only** — where engineers could reasonably disagree: storage, runtime, contracts, delivery, security, concurrency, backup, rollback, observability, tests.
 5. Per decision, record: options, choice, why, rejected alternative, trade-off, reversibility.

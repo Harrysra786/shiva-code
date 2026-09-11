@@ -15,7 +15,7 @@ Requires, all readable by path: `01-brief.md`, `02-flows.md`, `03-prototype-vali
 ## Ticket conventions
 
 - Location: `mds/epics/<epic>/06-tickets/NN-<slug>.md` (NN = execution order).
-- Frontmatter (the Kanban tab reads this): `ticket: <slug>`, `epic: <epic>`, `status: active`, `title: <imperative summary>`. **Never write `status: done`** — Done is the human's move on the Kanban.
+- Frontmatter (the Kanban tab reads this): `ticket: <slug>`, `epic: <epic>`, `status: active`, `title: <imperative summary>`. Agents move a ticket `active → in_progress → code_test → human_test` (that is `/07-build`'s job). **Never write `status: done`** — Done is the human's move on the Kanban.
 - Coverage matrix first: every UX id, Must Do, contract and test requirement maps to ≥1 ticket. Nothing unmapped.
 
 ## Ticket body contract
@@ -57,7 +57,7 @@ Audit independently; never trust the implementer's summary. `read` this ticket, 
 
 1. `read` the plan and all upstream artifacts — never break down from conversation memory.
 2. Verify the entry gate (statuses/audits). A missing artifact is a blocker, not an invitation to guess.
-3. Build the coverage matrix; cut tickets along **vertical seams** (independently finishable, testable, product still works), dependencies ordered, contracts before consumers.
+3. Build the coverage matrix; cut tickets along **vertical seams** (independently finishable, testable, product still works), dependencies ordered, contracts before consumers. Track the breakdown with `todo_write` when it spans several tickets.
 4. `write` every ticket with the full body contract above.
 5. Verify the tree: every ticket inside `06-tickets/`, frontmatter complete, deps point at existing files, matrix fully mapped.
 6. **Audit the set with one `subagent`**: give it the plan + every ticket path — "verify coverage against the plan, self-containedness of each ticket (an implementer needs no conversation memory), and that implementer/auditor prompts carry enough context; UX frozen, mocks/CDNs allowed. GREEN or findings." Iterate to GREEN.

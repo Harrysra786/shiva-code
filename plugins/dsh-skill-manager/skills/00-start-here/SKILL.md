@@ -26,13 +26,24 @@ Gates are real: `/03` requires `/01`+`/02`; `/04` requires validated prototype +
 ## Tool conventions of this dsh
 
 - **Artifacts are markdown files under `mds/`**, never conversation memory. Epic = folder; artifact = file. IDs are file paths. Status lives in frontmatter (`status:`).
-- **Reading/writing artifacts**: the `read`/`write`/`edit`/`glob` file tools. There is no `artifact_*` tool.
+- **Firing a skill**: the `skill` tool, by name (e.g. `skill 01-epic-brief`). The numbered 0x skills are the pipeline stages; `00-start-here` is the map.
+- **Reading/writing artifacts**: the `read`/`write`/`edit`/`glob`/`grep` file tools. There is no `artifact_*` tool.
 - **Questions with options**: the `ask_user_question` tool, always — options as consequences, recommendation first, marked "(Recommended)".
-- **Independent audits**: the `subagent` tool. An auditor gets file paths, never your summary of them, and must return GREEN or a reproducible finding list.
+- **Independent audits**: the `subagent` tool (`list_subagent_models` lists the models you may assign). An auditor gets file paths, never your summary of them, and must return GREEN or a reproducible finding list.
 - **Kanban**: the Kanban tab boards `mds/epics/*/06-tickets/*.md` by their `status` frontmatter. Columns: `active → in_progress → code_test → human_test → done` (a ticket with a missing or unknown status lands in **Other**, nothing is dropped). The board polls the files, so you move a card by `edit`ing the frontmatter. Agents move through the first four; **`done` is the human's move on the board** — never set it yourself.
-- **Prototypes live in `<workspace>/prototype/`** and render live in the Prototype tab; `/03-prototype` documents the browser-use API for driving them.
-- **Long-term memory (OpenViking)**: when the Memory tab shows the server running, the model has `mcp__openviking__find`, `_search`, `_read`, `_remember`, `_add_resource`, `_forget`, `_health` tools. At the start of substantive work, `find` past knowledge; after durable decisions, `remember` them. Memories, MDS artifacts and epic context can be addressed as `viking://` URIs.
-- **Orchestration law**: the principal agent (you, in `/07-build`) never creates or edits code. Code is written by builder subagents, verified by qa subagents, and checked against artifacts by an evaluator subagent. See `/07-build`.
+- **Prototypes live in `<workspace>/prototype/`** and render live in the Prototype tab. Drive the live view with the `prototype_automation` tool (ops `navigate`, `click`, `fill`, `read`, `eval`, `wait_for`, `screenshot`, plus raw `console`/`results`/`submit`/`wait`); the tab must be open, and screenshots need the one-time "Enable screen capture" grant.
+- **Media**: `generate_image`/`generate_video`/`generate_audio` save into `assets/`; reference the returned path. Use them for prototype media instead of placeholders.
+- **Web**: `web_search` and `web_fetch` (keyless DuckDuckGo provider) for research; `read_image` to look at a saved screenshot or asset.
+- **Remote servers**: `ssh_run` and `ssh_transfer` (paramiko) for work on an external VPS.
+- **Terminals**: `terminal_create`/`terminal_send`/`terminal_read`/`terminal_wait_for`/`terminal_list`/`terminal_resize`/`terminal_signal`/`terminal_close` for long-lived interactive sessions.
+- **Deploy & data**: the **GitHub**, **Supabase**, **Railway** and **Vercel** tabs connect those CLIs and the workspace's link to each — deploy/DB choices belong in `/04-tech-plan`, verification in `/08-review`.
+- **Long-term memory (OpenViking)**: when the Memory tab shows the server running, the model has fifteen `mcp__openviking__*` tools — `find`, `search`, `read`, `list`, `tree`, `write`, `edit`, `grep`, `glob`, `remember`, `add_resource`, `list_watches`, `cancel_watch`, `forget`, `health`. At the start of substantive work, `find` past knowledge; after durable decisions, `remember` them. Memories, MDS artifacts and epic context can be addressed as `viking://` URIs.
+- **Todo & jobs**: `todo_write` for multi-step work in one turn; `job_output`/`job_list`/`job_kill` for background processes.
+- **Orchestration law**: the principal agent (you, in `/07-build`) never creates or edits code. Code is written by builder subagents, verified by qa subagents, and checked against artifacts by an evaluator subagent. The `dsh-tool-guard` plugin **enforces this at the tool seam**: your `write`/`edit` is denied outside `mds/` and `prototype/`, and no agent may write `status: done`. See `/07-build`.
+
+## Where skills live
+
+The loader reads, in order: `<workspace>/.dsh/skills`, `<workspace>/.agents/skills`, `~/.dsh/skills`, `~/.agents/skills` (each a `<name>/SKILL.md` bundle or a flat `<name>.md`). The **Skills** tab manages them and can copy a skill into the workspace; this pipeline's skills ship inside the `dsh-skill-manager` plugin.
 
 ## The person you are talking to
 

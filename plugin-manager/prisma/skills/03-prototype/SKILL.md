@@ -21,26 +21,23 @@ Build in **`<workspace>/prototype/`** (create it if missing) with the `write` to
 - Default entry: `prototype/index.html`. Screens from `02-flows.md`, each flow's happy + unhappy states reachable; unhappy paths get labelled demo controls ("simular erro"). Landing view = the first real screen of the journey, never a meta-page.
 - Match the requester's language in every visible string. One screen per round-trip: build → hand over → collect corrections → approve. Never blanket-approve several screens.
 
-## Part 2 — Validate with browser use (our plugin's API)
+## Part 2 — Validate with browser use (the `prototype_automation` tool)
 
-Tell the requester: **open the Prototype tab** and, once, click **"Enable screen capture"** (needed for screenshots). The tab serves `prototype/` live and the injected shim lets you drive the page. All calls are `POST`, base `/prototype/api`, JSON, from the same origin:
+Tell the requester: **open the Prototype tab** and, once, click **"Enable screen capture"** (needed for screenshots). The tab serves `prototype/` live and injects a shim; drive it with the `prototype_automation` tool — no curl, no manual HTTP. The tab must be open: it is what executes each command.
 
-| Step | Call | Notes |
+| `op` | Extra args | Effect |
 |---|---|---|
-| Submit a command | `automation/submit` `{cmd:{op:'click', text:'Entrar'}}` | → `{ok, id}`; 409 means one is in flight — `automation/wait` for it first |
-| Wait the result | `automation/wait` `{id, timeoutMs:10000}` | → `{ok, result:{...}}` or timeout |
-| Navigate a page | `{op:'navigate', path:'login.html'}` | resolved by the tab |
-| Click | `{op:'click', selector:'#btn'}` **or** `{op:'click', text:'Entrar'}` | text matches visible buttons/links |
-| Fill | `{op:'fill', selector:'#email', value:'a@b.c'}` | native events, framework-safe |
-| Read | `{op:'read', selector:'.total'}` or `{attr:'href'}` | assertion data |
-| Run JS | `{op:'eval', code:'localStorage.getItem("proto_x_users")'}` | inspect mock state |
-| Wait element | `{op:'wait_for', selector:'.modal', timeoutMs:5000}` | |
-| Console dump | `{op:'console_dump'}` | shim buffer |
-| **Screenshot** | `{op:'screenshot'}` | full screen (chat + prototype); saved to `prototype/.shots/shot-<ts>.png`; needs capture enabled |
-| Console ring | `automation/console` | captured error/warn + runtime errors |
-| History | `automation/results` | last 50 results |
+| `navigate` | `path:'login.html'` | Open a page inside `prototype/` |
+| `click` | `selector:'#btn'` **or** `text:'Entrar'` | Click; `text` matches visible buttons/links |
+| `fill` | `selector:'#email', value:'a@b.c'` | Native events, framework-safe |
+| `read` | `selector:'.total'` or `attr:'href'` | Assertion data |
+| `eval` | `code:'localStorage.getItem("proto_x_users")'` | Inspect mock state |
+| `wait_for` | `selector:'.modal', timeoutMs:5000` | Wait for an element |
+| `screenshot` | — | Full screen (chat + prototype); saved to `prototype/.shots/shot-<ts>.png`; needs capture enabled |
+| `console` | — | Captured error/warn + runtime errors |
+| `results` | — | Last 50 command results |
 
-One command at a time; sequence is submit → wait → next. Use it to **self-test every screen before handing it over** (click the flow, fill the form, confirm no console errors, screenshot for evidence), and to reproduce exactly what the requester reports broken.
+One command at a time — the tool submits and waits. Use it to **self-test every screen before handing it over** (click the flow, fill the form, confirm no console errors, screenshot for evidence) and to reproduce exactly what the requester reports broken; then `read_image` the screenshot to see it. Any raw shim op (e.g. `console_dump`) goes through `op:'submit'` with `cmd`. For prototype media — hero, avatars, icons — use `generate_image`/`generate_video`/`generate_audio` (they save into `assets/`) instead of placeholder URLs.
 
 ## Part 3 — The GREEN gate
 

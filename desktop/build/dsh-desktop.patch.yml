@@ -109,6 +109,11 @@
     - id: kanban
       name: dsh-kanban
 
+    # Process laws at the tool seam: the principal agent writes only mds/ and
+    # prototype/ (code is a subagent's job), and no agent may set status: done.
+    - id: tool-guard
+      name: dsh-tool-guard
+
     - id: assets
       name: dsh-assets
     - id: 9router

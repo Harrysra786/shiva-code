@@ -14,6 +14,7 @@ KISS multiuser profiles: one dsh, one home, and a **profile** that decides which
 - **No active profile** → dsh opens on a full-screen picker (list + Criar perfil modal).
 - **Active profile** → dsh runs normally; a **Perfil** button in the sidebar footer logs out / switches (clears active → `location.reload()` → picker).
 - Plugin visibility is driven by `window.__profileTabEnabled(id)`; absent profiles or an empty roster → everything visible.
+- **Skill roots the picker lists**: the plugin's own `dsh-skill-manager/skills/`, `~/.dsh/skills`, `~/.agents/skills`. A profile's `skills[]` selects among them; an empty list means all.
 
 ## Using it
 
