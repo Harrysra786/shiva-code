@@ -23,7 +23,7 @@ Build in **`<workspace>/prototype/`** (create it if missing) with the `write` to
 
 ## Part 2 — Validate with browser use (the `prototype_automation` tool)
 
-Tell the requester: **open the Prototype tab** and, once, click **"Enable screen capture"** (needed for screenshots). The tab serves `prototype/` live and injects a shim; drive it with the `prototype_automation` tool — no curl, no manual HTTP. The tab must be open: it is what executes each command.
+Drive it with the `prototype_automation` tool — no curl, no manual HTTP. **You never need the human to open anything**: the tool opens the Prototype tab itself when it is closed, and `screenshot` captures the app window (always available — there is no toggle). The tab serves `prototype/` live and injects a shim; it is what executes each command.
 
 | `op` | Extra args | Effect |
 |---|---|---|
@@ -33,7 +33,7 @@ Tell the requester: **open the Prototype tab** and, once, click **"Enable screen
 | `read` | `selector:'.total'` or `attr:'href'` | Assertion data |
 | `eval` | `code:'localStorage.getItem("proto_x_users")'` | Inspect mock state |
 | `wait_for` | `selector:'.modal', timeoutMs:5000` | Wait for an element |
-| `screenshot` | — | Full screen (chat + prototype); saved to `prototype/.shots/shot-<ts>.png`; needs capture enabled |
+| `screenshot` | — | Full screen (chat + prototype); saved to `prototype/.shots/shot-<ts>.png` |
 | `console` | — | Captured error/warn + runtime errors |
 | `results` | — | Last 50 command results |
 

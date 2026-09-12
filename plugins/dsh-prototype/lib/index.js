@@ -79,29 +79,34 @@ function log(msg) {
  * @returns absolute path of the workspace this request belongs to.
  */
 async function workspaceOf(ctx, payload) {
-  const cwd = typeof payload?.cwd === 'string' ? payload.cwd.trim() : ''
-  if (cwd && resolve(cwd) === cwd) return cwd
   const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : ''
-  if (!sessionId) return process.cwd()
 
-  const live = ctx.get('sessions')?.get(sessionId)?.header?.cwd
-  if (typeof live === 'string' && live) return live
+  // The session's own cwd is authoritative: the client-supplied `cwd` can be the
+  // harness launch root (a desktop-only directory) while the conversation lives
+  // in a workspace. Resolve the session first, and fall back to the hint only
+  // when the session is unknown to this backend.
+  if (sessionId) {
+    const live = ctx.get('sessions')?.get(sessionId)?.header?.cwd
+    if (typeof live === 'string' && live) return live
 
-  const persistence = ctx.get('sessionPersistence')
-  if (persistence !== undefined) {
-    let stored
-    try {
-      stored = (await persistence.inspect(sessionId)).meta.cwd
-    } catch (e) {
-      // `inspect` rejects for an id with no record on disk - a session the tab
-      // reported that this harness's backend does not own. Nothing else can
-      // reach here, and the fallback below is the answer for it.
-      log(`session "${sessionId}" is not on disk: ${String((e && e.message) || e)}`)
+    const persistence = ctx.get('sessionPersistence')
+    if (persistence !== undefined) {
+      let stored
+      try {
+        stored = (await persistence.inspect(sessionId)).meta.cwd
+      } catch (e) {
+        // `inspect` rejects for an id with no record on disk - a session the tab
+        // reported that this harness's backend does not own.
+        log(`session "${sessionId}" is not on disk: ${String((e && e.message) || e)}`)
+      }
+      if (typeof stored === 'string' && stored) return stored
     }
-    if (typeof stored === 'string' && stored) return stored
   }
 
-  log(`session "${sessionId}" has no cwd - falling back to ${process.cwd()}`)
+  const cwd = typeof payload?.cwd === 'string' ? payload.cwd.trim() : ''
+  if (cwd && resolve(cwd) === cwd) return cwd
+
+  log(`no session cwd for "${sessionId || '(none)'}" - falling back to ${process.cwd()}`)
   return process.cwd()
 }
 
@@ -587,8 +592,8 @@ async function runAutomation(queue, scope, args) {
 /**
  * Build the `prototype_automation` tool. It drives the same `automation/*`
  * queue the Prototype tab consumes, in-process, so the agent never needs curl:
- * the tab must be open (it is what executes commands and answers `pending`),
- * and screenshots need the one-time screen-capture grant.
+ * the tab must be open (it is what executes commands and answers `pending`).
+ * Screen capture is always on — the desktop grants the first screen silently.
  */
 function createAutomationTool(ctx, queue) {
   return defineTool({
@@ -596,8 +601,8 @@ function createAutomationTool(ctx, queue) {
     description:
       'Drive the live Prototype browser view of the workspace: navigate, click, fill, read, eval, wait_for, ' +
       'screenshot, plus the raw console/results/submit/wait queue ops. Use it to self-test every prototype screen ' +
-      'before handing it over and to reproduce what the requester reports. The Prototype tab must be open (it ' +
-      'executes the commands); screenshots need the one-time "Enable screen capture" grant.',
+      'before handing it over and to reproduce what the requester reports. It opens the Prototype tab automatically ' +
+      'when it is closed; screenshots capture the app window and are always available.',
     parameters: {
       op: { type: 'string', required: true, enum: AUTOMATION_OPS, description: 'Operation to run against the live prototype view.' },
       selector: { type: 'string', description: 'CSS selector (click/fill/read/wait_for).' },
@@ -615,9 +620,12 @@ function createAutomationTool(ctx, queue) {
       render: (args, value) => [{ type: 'text', text: `prototype ${args.op}: ${JSON.stringify(value)}` }],
     },
     async execute(args, exec) {
-      const cwd = exec?.agent?.session?.header?.cwd ?? process.cwd()
+      const cwd = exec?.agent?.session?.header?.cwd
       const sessionId = exec?.agent?.session?.header?.id ?? ''
-      const workspace = await workspaceOf(ctx, { cwd, sessionId })
+      // Never fall back to process.cwd(): the harness runs at the desktop's
+      // launch root, so that would target an empty workspace. Let the host
+      // resolve the workspace from the session id instead.
+      const workspace = await workspaceOf(ctx, cwd ? { cwd, sessionId } : { sessionId })
       const root = join(workspace, PROTOTYPE_FOLDER)
       const scope = { token: scopeToken(workspace), root }
       return runAutomation(queue, scope, args)

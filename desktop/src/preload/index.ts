@@ -144,6 +144,10 @@ contextBridge.exposeInMainWorld('dshDesktopDirectoryPicker', {
   pick: (): Promise<string | null> => ipcRenderer.invoke('directory-picker:open')
 })
 
+contextBridge.exposeInMainWorld('dshDesktopScreenCapture', {
+  capture: (): Promise<string> => ipcRenderer.invoke('screen-capture:shot')
+})
+
 /**
  * `[data-dsh-*]` lookups are attribute selectors with no index behind them, so
  * a miss costs a full tree walk. Caching the nodes turns the steady state into

@@ -1,6 +1,6 @@
 {
   "name": "dsh-kanban",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DSH better-sidebar Kanban board over the workspace mds/epics/*/06-tickets/*.md tickets: reads the status frontmatter and moves cards through active → in_progress → code_test → human_test → done",
   "type": "module",
   "license": "MIT",
