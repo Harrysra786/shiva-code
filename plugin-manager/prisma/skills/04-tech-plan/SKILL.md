@@ -18,14 +18,9 @@ Decide alone and just state: language, libraries, layout, naming, schema shape, 
 
 ## Delivery, data and servers
 
-The workspace's connection tabs are the real mechanism for these, and the plan names them instead of hand-rolling:
+The workspace's connection tools are the real mechanism for these, and the plan names them instead of hand-rolling. Each is an agent tool (see `/11-connections`): `railway_cli`/`vercel_cli` (deploy), `supabase_cli` (database/SQL/auth), `github_cli` (repo/PR), plus `ssh_run`/`ssh_transfer` (external VPS).
 
-- **Deploy**: the **Railway** or **Vercel** tab (install the CLI, log in, link this workspace).
-- **Database / SQL / auth**: the **Supabase** tab.
-- **Repository / PR**: the **GitHub** tab.
-- **External VPS**: the `ssh_run`/`ssh_transfer` tools.
-
-Name which one the epic uses and the boundary it must not cross.
+Check reality before writing the plan: call `status` on the provider the epic will use — it says whether the CLI is installed, the account is connected and the workspace is linked. `login` opens the browser for the human to authorize once. Name which provider the epic uses and the boundary it must not cross.
 
 ## Procedure
 

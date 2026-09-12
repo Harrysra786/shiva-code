@@ -124,6 +124,11 @@
     - id: web-search
       name: dsh-web-search
 
+    # Agent control of the better-sidebar browser tab: open, navigate,
+    # screenshot, open external URLs (the `browser` tool).
+    - id: browser-agent
+      name: dsh-browser
+
     # SSH to external VPS servers: one-click paramiko install into a dedicated
     # venv plus the agents' ssh_run/ssh_transfer tools.
     - id: paramiko
