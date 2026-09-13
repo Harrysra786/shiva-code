@@ -20,7 +20,7 @@ Requires the audited tickets from `/06-tickets` **and** a validated `mds/epics/<
 | **qa-tester** | **only create tests and run them** (`write`/`edit` test files, run `bash`/`pwsh`/`terminal_*`) — unit, typecheck, regression, e2e/flow checks where applicable; may fix tests, never product code | edit product code | **RED/GREEN** + full test evidence (commands + outputs) |
 | **evaluator** | `read` the ticket, the epic artifacts (brief/flows/prototype.md/plan) and the diff; judge match | edit anything | GREEN (work matches artifacts) or RED with the exact mismatch list |
 
-For a deploy or database surface, run it through the workspace's connection tools — `railway_cli`/`vercel_cli` (deploy), `supabase_cli` (database) — and verify with a real URL, not a local mock: `browser {op:'navigate', url}` then `browser {op:'screenshot'}`. See `/11-connections`.
+For a deploy or database surface, run it through the workspace's connection tools — `railway_cli`/`vercel_cli` (deploy), `supabase_cli` (database) — and verify with a real URL, not a local mock: `browser {op:'navigate', url}` then `browser {op:'screenshot'}`. A command that exits successfully is **not** proof the deploy is correct: it must land on the application service (never the database), and the proof is the right service answering on the right URL. Follow the provisioning order and the verification in `/11-connections`.
 
 Spawn with the `subagent` tool. Every spawned agent's prompt contains: the ticket file path, the context-manifest paths, its single role, and the frozen-UX reminder ("prototype.md is a binding contract; mocks/CDNs allowed as declared; do not redesign"). Auditors/evaluators always `read` the artifacts themselves — never trust your summary, never trust the builder's.
 
