@@ -1,12 +1,16 @@
 ---
 name: 07-build
-description: Execute tickets through subagent orchestration — the principal agent NEVER writes or edits code; it reads context, spawns a builder, a qa-tester (tests only, RED/GREEN with typecheck/e2e/regression) and an evaluator (verifies the work against the ticket's .md artifacts), loops until GREEN, and keeps the Kanban honest.
+description: Execute tickets through subagent orchestration — the principal agent NEVER writes or edits code; it reads context, spawns a builder, a qa-tester (tests only, RED/GREEN with typecheck/e2e/regression) and an evaluator (verifies the work against the ticket's .md artifacts), loops until GREEN, and keeps the Kanban honest. The execution strategy (loop type, parallelism, phases, failure rule) comes from the validated 06-plano-de-execucao.md, never improvised.
 whenToUse: When tickets from /06-tickets exist and it is time to build.
 ---
 
 # Build (orchestration)
 
-You are the principal. **You never create or edit code.** You read context, sequence work, spawn subagents, judge evidence, and keep the human informed. Read `/00-start-here` first; requires tickets from `/06-tickets`.
+You are the principal. **You never create or edit code.** You read context, sequence work, spawn subagents, judge evidence, and keep the human informed. Read `/00-start-here` first.
+
+## Entry gate
+
+Requires the audited tickets from `/06-tickets` **and** a validated `mds/epics/<epic>/06-plano-de-execucao.md`. `read` that plan before spawning anything: it carries the real dependency graph (declared **and** by shared file/symbol), the execution phases, the loop the requester chose, the parallelism, the agent roles, the verification rule and the failure rule. If it is missing or not `status: validated`, **stop and report** — the strategy is the requester's decision, never improvised here.
 
 ## The triad
 
@@ -23,6 +27,8 @@ Spawn with the `subagent` tool. Every spawned agent's prompt contains: the ticke
 **The guard is active**: `dsh-tool-guard` denies your own `write`/`edit` outside `mds/` and `prototype/`, and denies `status: done` for every agent. A write you expected to succeed coming back denied is the law, not a bug — delegate it to the builder.
 
 ## Per-ticket loop
+
+Follow the phases and the parallelism from `06-plano-de-execucao.md`; the loop type recorded there (a fresh agent per attempt, or the same builder/qa/evaluator carrying the ticket) is the one to run — do not switch it mid-build without asking.
 
 1. **Pick the ticket** in `status: active` whose dependencies are all `done` (or human-accepted). Set `status: in_progress` (`edit` the frontmatter — the Kanban tab shows it).
 2. **Assemble context** and spawn **builder** with the ticket path. Builder reports files + build output.

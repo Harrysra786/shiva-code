@@ -17,11 +17,11 @@ You are the guide. The person you are talking to knows what they want built but 
 | `/03-prototype` | Validated HTML prototype + BDD contract | `epics/<epic>/03-prototype-validation.md`, `epics/<epic>/prototype.md`, `epics/<epic>/db-schema.json`; live pages in `<workspace>/prototype/` |
 | `/04-tech-plan` | Technical direction | `epics/<epic>/04-tech-plan.md` |
 | `/05-debate` | A hard decision, argued | `epics/<epic>/05-debates.md` |
-| `/06-tickets` | Tickets on the Kanban | `epics/<epic>/06-tickets/NN-slug.md` |
+| `/06-tickets` | Tickets on the Kanban + the execution strategy | `epics/<epic>/06-tickets/NN-slug.md`, `epics/<epic>/06-plano-de-execucao.md` |
 | `/07-build` | Executed tickets via builder/qa/evaluator subagents | code + updated ticket frontmatter (Kanban tab) |
 | `/08-review` | Final verification + honest handover | `epics/<epic>/08-review.md` |
 
-Gates are real: `/03` requires `/01`+`/02`; `/04` requires validated prototype + `prototype.md` audited GREEN; `/06` requires `/04` GREEN; `/07` requires tickets. Skip a stage only deliberately, and say so out loud.
+Gates are real: `/03` requires `/01`+`/02`; `/04` requires validated prototype + `prototype.md` audited GREEN; `/06` requires `/04` GREEN; `/07` requires the tickets **and** a validated `06-plano-de-execucao.md`. Skip a stage only deliberately, and say so out loud.
 
 ## Tool conventions of this dsh
 
