@@ -80,3 +80,21 @@ Anything you started (server, watcher, process) dies when your turn ends. Before
 3. Every checklist begins with the exact start command and its directory, which you ran yourself first.
 4. Say what "working" looks like (the line it prints, the page that appears).
 5. Never write "it is running at X." Write "to start it, run Y in Z; you will see W; then open X."
+
+## Subagent truth (never claim without measuring)
+
+A subagent that has stopped and asked a question sits **idle forever** until the principal answers; nothing announces it. So:
+
+- **Never state a subagent's status without calling `list_agents` at that moment.** "Still running" is a measurement, not a guess.
+- `running` = working now. `idle` = loaded, between turns, **may be waiting for your answer**. `ready` = finished — the result is available to collect, not "pending".
+- An `idle` subagent that asked a question is stuck until someone answers. **Fetching the result is the principal's job; waiting is the failure.**
+- Before any reply to the human that mentions progress, run the stall check: `list_agents` + `job_output`.
+- On any notice that a subagent "paused with a question", answer it or reassign — never ignore it and move on.
+- The `dsh-plugin-heartbeat` vigia wakes you every 5 minutes to run this check; it only helps if you obey the rule.
+
+## Files: measure by bytes, edit by mapping
+
+Console rendering is not evidence about a file's bytes. Two rules:
+
+- **Judge encoding only by reading bytes in Node** (`fs.readFileSync(p, 'utf8')`, counting U+FFFD and the mojibake pair). Mojibake on screen does not prove mojibake in the file; PowerShell 5.1's `Get-Content` renders UTF-8 as Latin-1. Before "fixing" corruption, prove it: an empty `git diff` with a correct `git log -p` means the fault is your instrument, not the file. In Portuguese a lone `Ã` is not a mojibake marker (the word has no legitimate `Ã`) — require the full pair. Separate the two modes, because the remedies are opposite: **mojibake** (information survives, reversible) vs **U+FFFD** (byte destroyed, unrecoverable — report it, never guess a repair).
+- **Never mass-rewrite artifacts through the shell.** A prior incident corrupted 15 files (577 U+FFFD) with a PowerShell bulk markdown rewrite. Require an explicit, context-anchored mapping that **aborts** on an unmapped sequence — never a byte-wise generic transform. Snapshot before; verify by bytes after.

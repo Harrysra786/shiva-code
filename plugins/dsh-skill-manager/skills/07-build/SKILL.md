@@ -45,6 +45,15 @@ Follow the phases and the parallelism from `06-plano-de-execucao.md`; the loop t
 - Budget: cap rounds per ticket up front (default 5). An unbounded loop burns trust and tokens.
 - Report honestly at the end: rounds, findings raised/resolved, criteria unmet. "3 criteria still unmet" is a useful result; a false "done" is worthless.
 
+## Evidence rules
+
+- **A builder's suite passing is not a QA run.** It is a second opinion on unchanged work. The qa-tester writes its own adversarial tests and tries to break the work, not confirm it. In one epic the builder's 81 assertions passed and the independent QA still found a security defect the suite never touched.
+- **Every UI delivery needs a real-browser screenshot.** That is exactly the defect three code audits missed and one print caught in minutes.
+- **Mandatory in the matrix:** route bypass (percent-encoding, case, doubled slashes, `..`), path traversal, forged/expired/`alg`-swapped tokens, missing/extra fields, wrong types, and sensitive-field leakage on **every** route.
+- **Agent evidence is a claim until the principal measures.** The principal personally checks each ticket's highest-risk item with its own command before accepting. When the local environment cannot produce the proof, the proof comes from the real environment: deploy and read the real log / the real URL.
+- **Command success is not behavioural proof.** A passing build does not prove the container starts. Measure "before" and "after" with the same independent script when one exists.
+- **Instrument error ≠ product error.** Before reporting a defect, confirm the tool is not the cause; reproduce with a second tool when the result is strange. On Windows prefer `curl.exe` for HTTP and pass JSON bodies from a file (`--data-binary @file`), not inline. When testing a rate-limiter or shared state, use a **new value per case**.
+
 ## Escalation
 
 Anything the loop cannot settle (ambiguous ticket, conflicting artifacts, missing decision, stalled rounds) → `ask_user_question` with concrete options as consequences. Autonomy is not a licence to guess on a decision the requester owns.

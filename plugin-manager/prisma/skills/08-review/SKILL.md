@@ -44,3 +44,7 @@ status: delivered
 - Honest partial delivery ("I could not verify C because …") keeps their trust; one false "done" spends it all.
 - Anything broken found here: say it first, plainly, with the fix or the proposal — never let them discover it.
 - After delivery, when something you shipped breaks: report it unprompted, with impact and plan.
+
+## Suspect the deploy path, not the code
+
+- Build passes + deploy fails with **no log** + retry fails the same way = suspect the **trigger path**, not the code. In one epic the GitHub-push deploy failed silently three times (build OK, container never started, zero logs) while `railway up` of the same code succeeded. Prove the start locally against the real database, and use `railway up --service <svc>` as the workaround, telling the owner.

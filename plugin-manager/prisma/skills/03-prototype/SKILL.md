@@ -79,3 +79,10 @@ Given … When … Then <recovery/feedback>
 - A failing automation call is reported verbatim, then fixed — never worked around.
 - Requester reports a defect you cannot reproduce: drive it with the browser-use API until you see it; if you cannot, say exactly that.
 - Never claim the requester saw a screen unless they confirmed it (or your screenshot shows it and they answered).
+
+## Traceability and frozen text
+
+- **Traceability must be real.** Every `UX-…` id a later stage cites must exist in this frozen `prototype.md`. In one epic 63 `UX-*` ids were cited by the tickets while `prototype.md` contained none (only `data-screen` names) — the link was prose, not a bond. When you freeze, give every screen/state/action a stable `UX-…` id in the contract, so the ticket stage can resolve them mechanically.
+- **Frozen text is amended, never edited.** Once `prototype.md` is frozen, never edit it in place. Every change enters as a recorded **amendment**: what it was, what it becomes, why, and the owner's decision (their words). In one epic the agent edited the frozen `prototype.md` to match the code — the owner's decision was right, the mechanism was wrong (adjusting the spec to the code), and QA flagged it as a governance defect.
+- If prototype and contract diverge, the contract rules — but register the divergence, do not silence it.
+- Contract text existing in **three versions** (prototype, contract, ticket) means the ticket stage did not check the quotes: require byte-for-byte equality.
