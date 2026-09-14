@@ -1,0 +1,52 @@
+diff --git a/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js b/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js
+--- a/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js
++++ b/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js
+@@ -398,7 +398,7 @@ function initProfile(dir, bundles, patchReload = DEFAULT_PROFILE_PATCH_RELOAD) {
+ }
+ function readModuleProxyRecord(link) {
+ 	try {
+-		return JSON.parse(readFileSync(join(link, "package.json"), "utf8"));
++		return readPackageManifest(join(link, "package.json"));
+ 	} catch {
+ 		return;
+ 	}
+@@ -508,7 +508,7 @@ function packageEntryFromPackage(packageName, packageDir, declared, subpath) {
+ }
+ /** Resolve every explicit ESM runtime export that an out-of-tree plugin can import. */
+ function packageProxySource(packageName, packageDir) {
+-	const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
++	const manifest = readPackageManifest(join(packageDir, "package.json"));
+ 	if (typeof manifest.version !== "string" || manifest.version.length === 0) throw new Error(`dsh: installed package ${packageName} must declare a non-empty version`);
+ 	const declared = manifest.exports;
+ 	if (declared === void 0) {
+@@ -577,9 +577,20 @@ function ensureModuleProxy(link, packageName, version, targets) {
+ 		writeFileSync(join(link, `entry-${index}.js`), `export * from ${specifier}\nimport * as target from ${specifier}\nexport default target.default\n`);
+ 	}
+ }
++/**
++* Parse a package.json the way Node's module loader does: a leading UTF-8 byte
++* order mark is ignored. Windows tooling can write manifests with one, and
++* plain JSON.parse rejects it.
++* @param path - absolute path of the manifest.
++* @returns the parsed manifest.
++*/
++function readPackageManifest(path) {
++	const text = readFileSync(path, "utf8");
++	return JSON.parse(text.charCodeAt(0) === 65279 ? text.slice(1) : text);
++}
+ /** Read one package manifest used while traversing a module-fallback dependency graph. */
+ function readModuleFallbackManifest(anchor) {
+-	return JSON.parse(readFileSync(anchor, "utf8"));
++	return readPackageManifest(anchor);
+ }
+ /** Return dependency names that may be imported by a loader-visible plugin. */
+ function profileDependencyNames(manifest) {
+@@ -858,7 +869,7 @@ function loadProfile(binName, name, installAnchor, home = resolveDshHome(), opti
+ 	const patchReload = rawPatchReload ?? "live";
+ 	const layers = bundles.map((packageName) => {
+ 		const packageDir = resolveBundleDir(binName, packageName, installAnchor, dir);
+-		const declared = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8")).dsh?.bundle?.patch;
++		const declared = readPackageManifest(join(packageDir, "package.json")).dsh?.bundle?.patch;
+ 		if (declared === void 0) throw new Error(`${binName}: profile bundle ${JSON.stringify(packageName)} declares no dsh.bundle in its package.json`);
+ 		const patchPath = join(packageDir, declared);
+ 		return {

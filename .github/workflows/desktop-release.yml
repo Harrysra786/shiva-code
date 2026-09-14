@@ -468,6 +468,29 @@ jobs:
       - name: Build isolated Windows development package
         if: needs.resolve-version.outputs.publish != 'true'
         run: npm run package:dev:win
+      # Diagnostic only: names package manifests that start with a UTF-8 byte
+      # order mark, which the bundled Harness's dependency walk once rejected.
+      - name: Report BOM-prefixed package manifests
+        shell: pwsh
+        env:
+          SMOKE_DIR: ${{ needs.resolve-version.outputs.publish == 'true' && 'dist' || 'dist-dev' }}
+        run: |
+          $roots = @((Join-Path $env:SMOKE_DIR 'win-unpacked'), 'node_modules') | Where-Object { Test-Path $_ }
+          $found = 0
+          foreach ($root in $roots) {
+            Get-ChildItem -Path $root -Recurse -Filter package.json -File -ErrorAction SilentlyContinue | ForEach-Object {
+              $stream = [System.IO.File]::OpenRead($_.FullName)
+              try {
+                $head = New-Object byte[] 3
+                $read = $stream.Read($head, 0, 3)
+              } finally { $stream.Dispose() }
+              if ($read -eq 3 -and $head[0] -eq 0xEF -and $head[1] -eq 0xBB -and $head[2] -eq 0xBF) {
+                Write-Host "BOM: $($_.FullName)"
+                $found++
+              }
+            }
+          }
+          Write-Host "BOM-prefixed package.json files: $found"
       - name: Smoke test packaged Windows Harness
         shell: pwsh
         env:
