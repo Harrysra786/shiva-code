@@ -16,7 +16,10 @@ const BASE = `http://127.0.0.1:${PORT}`
 
 async function main() {
   const list = await (await fetch(`${BASE}/json/list`)).json()
-  const target = list.find((t) => t.type === 'page' && /127\.0\.0\.1/.test(t.url) && /token=|dsh-desktop-mode/.test(t.url))
+  const pages = list.filter((t) => t.type === 'page')
+  const target =
+    pages.find((t) => /^http:\/\/127\.0\.0\.1:\d+\/?$/.test(t.url)) ??
+    pages.find((t) => /127\.0\.0\.1/.test(t.url) && !/windows-menu/.test(t.url) && !/railway\.app/.test(t.url))
   if (!target) {
     console.error('main window target not found on CDP. targets:')
     for (const t of list) console.error(` - ${t.type} ${t.url}`)
