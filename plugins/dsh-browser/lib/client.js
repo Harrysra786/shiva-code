@@ -38,6 +38,21 @@ function api(method, payload) {
   }).then((r) => r.json())
 }
 
+/**
+ * Hard deadline for one full-scope command. The poller must always answer the
+ * host: a wedged renderer or a dead target can never be allowed to leave the
+ * poll loop parked in an await (that is what killed the channel before).
+ */
+function withDeadline(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(label + ' timeout after ' + ms + 'ms')), ms)
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v) },
+      (e) => { clearTimeout(timer); reject(e) },
+    )
+  })
+}
+
 function wa() {
   return window.dshDesktopWebAgent
 }
@@ -250,6 +265,13 @@ async function runFullCommand(cmd) {
     if (!r || !r.ok) throw new Error((r && r.error) || 'wait_for falhou')
     return { ok: true, data: r.data }
   }
+  if (cmd.op === 'reconnect') {
+    const r = await bridge.run({ op: 'reconnect' })
+    if (!r || !r.ok) throw new Error((r && r.error) || 'reconnect falhou')
+    fullUrl = (r.data && r.data.url) || fullUrl
+    await attachFull()
+    return { ok: true, data: r.data }
+  }
   if (cmd.op === 'click' || cmd.op === 'fill' || cmd.op === 'read' || cmd.op === 'eval') {
     await attachFull()
     const r = await bridge.run({ op: cmd.op, selector: cmd.selector, text: cmd.text, value: cmd.value, code: cmd.code, attr: cmd.attr })
@@ -294,7 +316,7 @@ function apply(ctx) {
             if (alive && cmd) {
               if (cmd.scope === 'full') {
                 try {
-                  const out = await runFullCommand(cmd)
+                  const out = await withDeadline(runFullCommand(cmd), 40000, 'full command')
                   await api('result', { id: cmd.id, ...out })
                 } catch (e) {
                   await api('result', { id: cmd.id, ok: false, error: String((e && e.message) || e) })

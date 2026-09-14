@@ -101,7 +101,7 @@ async function saveShot(workspace, dataUrl) {
 /** Ops the agent tool exposes. */
 const TAB_OPS = ['open', 'navigate', 'focus', 'screenshot', 'open_external']
 /** Ops that script a real page — they only run in scope "full". */
-const FULL_OPS = ['click', 'fill', 'read', 'eval', 'console', 'wait_for', 'wait']
+const FULL_OPS = ['click', 'fill', 'read', 'eval', 'console', 'wait_for', 'wait', 'reconnect']
 const BROWSER_OPS = [...TAB_OPS, ...FULL_OPS]
 
 /**
@@ -134,11 +134,12 @@ function createTool(ctx) {
       'navigate (open the Browser tab at url) · focus (bring an open Browser tab to the front) · screenshot (capture the app ' +
       'window showing the Browser tab; saved under the workspace and returned as a path) · open_external (open url in the ' +
       'machine\'s default browser, e.g. an OAuth or dashboard link) · plus FULL-SCOPE page automation: click, fill, read, ' +
-      'eval, console, wait_for, wait — these require scope:"full" and the permanent browserFullAccess: true flag in the ' +
+      'eval, console, wait_for, wait, reconnect — these require scope:"full" and the permanent browserFullAccess: true flag in the ' +
       'harness settings.yaml; with it you drive ANY real URL like a user (logins included: read credentials from a project ' +
       'file or env var, never from chat). fill never echoes the value. In scope "full" the page renders live inside the ' +
-      'Browser tab and screenshots capture the page itself. The workspace prototype sandbox (default scope) is unchanged: ' +
-      'for prototype pages use prototype_automation.',
+      'Browser tab and screenshots capture the page itself. The target self-heals: a navigation or a page-initiated reload ' +
+      'that orphans the target is detected, re-resolved and retried once; op "reconnect" forces that re-resolution by hand. ' +
+      'The workspace prototype sandbox (default scope) is unchanged: for prototype pages use prototype_automation.',
     parameters: {
       op: { type: 'string', required: true, enum: BROWSER_OPS, description: 'Operation to run.' },
       url: { type: 'string', description: 'Target URL (open/navigate/open_external).' },
