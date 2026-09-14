@@ -13,8 +13,7 @@
     "packages/*/*",
     "native/system",
     "native/system/packages/*",
-    "apps/*",
-    "website"
+    "apps/*"
   ],
   "scripts": {
     "build": "tsx scripts/build.ts",
@@ -40,6 +39,7 @@
     "upload:mac:arm64": "pnpm --filter @deepseek-ai/dsh-desktop run upload:mac:arm64",
     "upload:mac:x64": "pnpm --filter @deepseek-ai/dsh-desktop run upload:mac:x64",
     "upload:win:x64": "pnpm --filter @deepseek-ai/dsh-desktop run upload:win:x64",
+    "dev": "npm --prefix desktop run dev",
     "clean": "tsx scripts/clean.ts",
     "change-scope": "tsx scripts/change-scope.ts",
     "typecheck": "npm run build:lib:host && npm run typecheck:contracts-ready",
@@ -94,7 +94,6 @@
     "doc-typecheck:contracts-ready": "tsx scripts/doc-typecheck.ts",
     "verify-md-wrap": "tsx scripts/verify-md-wrap.ts",
     "verify-md-links": "tsx scripts/verify-md-links.ts",
-    "verify-doc-site-fragments": "tsx scripts/verify-doc-site-fragments.ts",
     "verify-public-repository-links": "tsx scripts/verify-public-repository-links.ts",
     "verify-doc-refs": "tsx scripts/verify-doc-refs.ts",
     "verify-subsystem-pages": "tsx scripts/verify-subsystem-pages.ts",
@@ -117,13 +116,6 @@
     "resolve-translation-pairing-conflicts": "tsx scripts/merge-translation-pairing.ts --resolve",
     "gen-translation-brief": "tsx scripts/gen-translation-brief.ts",
     "verify-doc-budgets": "tsx scripts/verify-doc-budgets.ts",
-    "docs:dev": "pnpm --filter @deepseek-ai/website run dev",
-    "docs:build": "tsx website/build.ts && pnpm run verify-doc-site-fragments",
-    "docs:build:mpa": "tsx website/build.ts --mpa && pnpm run verify-doc-site-fragments",
-    "docs:preview": "pnpm --filter @deepseek-ai/website run preview",
-    "docs:check": "pnpm exec vitest run scripts/project-doc-site.spec.ts scripts/verify-doc-site-fragments.spec.ts && pnpm run docs:build",
-    "website:dev": "pnpm run docs:dev",
-    "website:build": "pnpm run docs:build",
     "verify-package-readme-limitations": "tsx scripts/verify-package-readme-limitations.ts",
     "verify-node-next-types": "tsx scripts/verify-node-next-types.ts",
     "verify-optional-dependency-imports": "tsx scripts/verify-optional-dependency-imports.ts",
@@ -180,7 +172,6 @@
     "demo:ptc": "node scripts/demo-ptc.mjs",
     "demo:inspector": "node --import tsx/esm apps/cli/src/bin.ts web --patch ./packages/experimental/inspector/cordis.source.patch.yml",
     "mock:llm": "node --import tsx packages/test-support/llm-mock-server/src/bin.ts",
-    "dev:web": "tsx scripts/dev-web.ts --poll",
     "postinstall": "node scripts/install-lefthook.mjs"
   },
   "devDependencies": {

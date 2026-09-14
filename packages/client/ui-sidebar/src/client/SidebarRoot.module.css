@@ -394,10 +394,18 @@
 }
 
 .settingsArea,
+.belowArea,
 .footerActions {
   flex: none;
   min-width: 0;
   width: 100%;
+}
+
+/* The last foot row, under Settings. A column, not a row, so an occupant may
+   take the full width without pushing a neighbour out of the sidebar. */
+.belowArea {
+  display: flex;
+  flex-direction: column;
 }
 
 .footerActions {
@@ -409,6 +417,7 @@
 }
 
 .collapsed .settingsArea,
+.collapsed .belowArea,
 .collapsed .footerActions {
   display: flex;
   justify-content: center;

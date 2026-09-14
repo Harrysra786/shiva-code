@@ -1,0 +1,908 @@
+name: Release desktop installers
+
+# Desktop releases are tagged `shiva-desktop-v<semver>`: this repository also
+# releases the harness, under `dsh-v*`, so a bare `v*` would not say which
+# product a tag ships. The `publish` job creates that tag, so there is no tag
+# trigger — `paths` on a `push` block filters tag pushes too, and a tag placed
+# on an already-pushed commit has a degenerate diff, which would silently
+# swallow the release.
+on:
+  # A push to master ships a release. The patch digit is automatic; bump
+  # desktop/package.json in a reviewed commit to cut a minor or major. Doc,
+  # test, and Markdown edits are excluded so they do not push an update card to
+  # every installed app.
+  push:
+    branches:
+      - master
+    paths:
+      - 'desktop/**'
+      - '!desktop/docs/**'
+      - '!desktop/test/**'
+      - '!desktop/**/*.md'
+      - '.github/workflows/desktop-release.yml'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Platform to build
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - windows
+          - macos
+      version:
+        description: Exact semver to re-cut a release at (empty builds without publishing)
+        required: false
+        type: string
+      prerelease_tag:
+        description: Non-v semver tag for a production-parity pre-release (e.g. 2.1.0-rc.1)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+# The desktop app is a self-contained npm project under desktop/. Every `run`
+# step below is one of its scripts, so the whole workflow takes that as its
+# directory; action inputs (`path:`, `cache-dependency-path:`) are resolved
+# against the workspace root instead and carry the prefix explicitly.
+defaults:
+  run:
+    working-directory: desktop
+
+jobs:
+  # One job decides what this run publishes, so every job below reads a single
+  # output instead of re-deriving the answer from `github.ref` in thirty places.
+  resolve-version:
+    name: Resolve release version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      publish: ${{ steps.resolve.outputs.publish }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+      windows_artifact: ${{ steps.resolve.outputs.windows_artifact }}
+    steps:
+      # `defaults.run.working-directory` applies to every job, so without a
+      # checkout each `run` below fails on the missing desktop/ directory.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCH_VERSION: ${{ inputs.version }}
+          PRERELEASE_TAG: ${{ inputs.prerelease_tag }}
+          WINDOWS_SIGNING: ${{ vars.DESKTOP_WINDOWS_SIGNING }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags --quiet
+          package_version="$(node -p "require('./package.json').version")"
+          # `grep` exits 1 when nothing matches, which under `pipefail` would
+          # kill the step on the very first release, when no tag exists yet.
+          # Prereleases and the harness's own `dsh-v*` tags are filtered out.
+          highest="$(git tag --list 'shiva-desktop-v*' \
+            | sed 's/^shiva-desktop-v//' \
+            | { grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
+            | sort -V | tail -n1)"
+          highest="${highest:-0.0.0}"
+
+          publish=false
+          prerelease=false
+          version=''
+
+          if [ -n "${PRERELEASE_TAG}" ]; then
+            version="${PRERELEASE_TAG#v}"
+            publish=true
+            prerelease=true
+          elif [ -n "${DISPATCH_VERSION}" ]; then
+            version="${DISPATCH_VERSION#v}"
+            publish=true
+          elif [ "${EVENT}" = 'push' ]; then
+            # package.json is the minor/major knob; CI owns the patch digit.
+            # It also seeds the sequence, since a fresh repository has no tag.
+            if [ "$package_version" != "$highest" ] && \
+               [ "$(printf '%s\n%s\n' "$package_version" "$highest" | sort -V | tail -n1)" = "$package_version" ]; then
+              version="$package_version"
+            else
+              version="$(echo "$highest" | awk -F. '{ printf "%d.%d.%d", $1, $2, $3 + 1 }')"
+            fi
+            publish=true
+          fi
+
+          if [ "$publish" = 'true' ]; then
+            echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$' \
+              || { echo "::error::Resolved version is not a semver: $version"; exit 1; }
+            # A pre-release is tagged with a bare semver; the product prefix
+            # belongs to stable releases, which is what the update feed reads.
+            if [ "$prerelease" = 'true' ]; then tag="$version"; else tag="shiva-desktop-v$version"; fi
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "::error::Tag $tag already exists. A published version is never"
+              echo "::error::re-cut: bump desktop/package.json, or pick another tag."
+              exit 1
+            fi
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Signing rewrites the installer, so the signed job republishes the
+          # artifact under its own name. Naming the one to publish here keeps
+          # both downstream jobs from repeating the flag check.
+          if [ "${WINDOWS_SIGNING}" = 'true' ]; then
+            echo 'windows_artifact=windows-x64' >> "$GITHUB_OUTPUT"
+          else
+            echo 'windows_artifact=windows-x64-unsigned' >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=$version publish=$publish prerelease=$prerelease" \
+            "(package.json=$package_version highest tag=$highest)"
+
+  macos-apple-silicon:
+    name: macOS Apple Silicon
+    needs: resolve-version
+    # macOS packaging needs six Apple secrets. The jobs stay here in full; set
+    # the DESKTOP_MACOS_RELEASE repository variable to 'true' once they exist.
+    if: >-
+      vars.DESKTOP_MACOS_RELEASE == 'true' &&
+      (needs.resolve-version.outputs.publish == 'true' ||
+       (github.event_name == 'workflow_dispatch' && (inputs.target == 'all' || inputs.target == 'macos')))
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Set app version
+        if: needs.resolve-version.outputs.publish == 'true'
+        # The Windows runner defaults to PowerShell, where `$APP_VERSION` is an
+        # undefined variable that expands to nothing rather than an env lookup.
+        # The three jobs keep one spelling, so this is declared in all of them.
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: npm version --no-git-tag-version --allow-same-version "$APP_VERSION"
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - name: Validate Apple release secrets
+        if: needs.resolve-version.outputs.publish == 'true'
+        env:
+          CSC_LINK: ${{ secrets.DESKTOP_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.DESKTOP_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.DESKTOP_APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.DESKTOP_APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.DESKTOP_APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.DESKTOP_APPLE_TEAM_ID }}
+        run: |
+          required=(CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_CONTENT APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_TEAM_ID)
+          for name in "${required[@]}"; do
+            test -n "${!name}" || { echo "::error::Missing required secret: $name"; exit 1; }
+          done
+      - name: Prepare Apple notarization key
+        if: needs.resolve-version.outputs.publish == 'true'
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.DESKTOP_APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.DESKTOP_APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.DESKTOP_APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.DESKTOP_APPLE_TEAM_ID }}
+        run: |
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$APPLE_API_KEY_CONTENT" > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID" >> "$GITHUB_ENV"
+          echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
+          echo "APPLE_TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"
+      - name: Prepare macOS signing keychain
+        if: needs.resolve-version.outputs.publish == 'true'
+        id: signing_keychain
+        env:
+          CSC_LINK: ${{ secrets.DESKTOP_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.DESKTOP_CSC_KEY_PASSWORD }}
+        run: node scripts/prepare-macos-signing-keychain.mjs
+      - name: Build signed Apple Silicon package
+        if: needs.resolve-version.outputs.publish == 'true'
+        env:
+          CSC_KEYCHAIN: ${{ steps.signing_keychain.outputs.keychain }}
+        run: npm run package:mac:arm64
+      - name: Build isolated Apple Silicon development package
+        if: needs.resolve-version.outputs.publish != 'true'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run package:dev:mac:arm64
+      - name: Preserve Apple Silicon update metadata
+        if: needs.resolve-version.outputs.publish == 'true'
+        run: mv dist/latest-mac.yml dist/latest-mac-arm64.yml
+      - name: Sign, notarize, and staple Apple Silicon DMG
+        if: needs.resolve-version.outputs.publish == 'true'
+        env:
+          CSC_KEYCHAIN: ${{ steps.signing_keychain.outputs.keychain }}
+        run: |
+          dmg_path="dist/dsh-desktop-mac-arm64.dmg"
+          identity="$(security find-identity -v -p codesigning "$CSC_KEYCHAIN" | awk '/Developer ID Application/ { print $2; exit }')"
+          test -n "$identity" || { echo "::error::Developer ID Application identity not found"; exit 1; }
+          codesign --keychain "$CSC_KEYCHAIN" --sign "$identity" --timestamp --force "$dmg_path"
+          xcrun notarytool submit "$dmg_path" \
+            --key "$APPLE_API_KEY" \
+            --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait \
+            --no-s3-acceleration
+          xcrun stapler staple "$dmg_path"
+      - name: Remove temporary signing keychain
+        if: always() && needs.resolve-version.outputs.publish == 'true'
+        env:
+          SIGNING_KEYCHAIN: ${{ steps.signing_keychain.outputs.keychain }}
+          SIGNING_CERTIFICATE: ${{ steps.signing_keychain.outputs.certificate }}
+          SIGNING_KEYCHAIN_LIST: ${{ steps.signing_keychain.outputs.keychain_list }}
+        run: |
+          if [ -n "$SIGNING_KEYCHAIN_LIST" ] && [ -f "$SIGNING_KEYCHAIN_LIST" ]; then
+            keychains=()
+            while IFS= read -r keychain; do
+              test -z "$keychain" || keychains+=("$keychain")
+            done < "$SIGNING_KEYCHAIN_LIST"
+            security list-keychains -d user -s "${keychains[@]}"
+            rm -f "$SIGNING_KEYCHAIN_LIST"
+          fi
+          test -z "$SIGNING_KEYCHAIN" || security delete-keychain "$SIGNING_KEYCHAIN" || rm -f "$SIGNING_KEYCHAIN"
+          test -z "$SIGNING_CERTIFICATE" || rm -f "$SIGNING_CERTIFICATE"
+          test -z "$APPLE_API_KEY" || rm -f "$APPLE_API_KEY"
+      - name: Verify signed and notarized Apple Silicon app
+        if: needs.resolve-version.outputs.publish == 'true'
+        run: |
+          app_path="dist/mac-arm64/DSH Desktop.app"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+          xcrun stapler validate "$app_path"
+          codesign --verify --verbose=2 dist/dsh-desktop-mac-arm64.dmg
+          spctl --assess --type open --context context:primary-signature --verbose=4 dist/dsh-desktop-mac-arm64.dmg
+          xcrun stapler validate dist/dsh-desktop-mac-arm64.dmg
+      - uses: actions/upload-artifact@v4
+        if: needs.resolve-version.outputs.publish == 'true'
+        with:
+          name: macos-apple-silicon
+          path: |
+            desktop/dist/dsh-desktop-mac-arm64.dmg
+            desktop/dist/dsh-desktop-mac-arm64.zip
+            desktop/dist/dsh-desktop-mac-arm64.zip.blockmap
+            desktop/dist/latest-mac-arm64.yml
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: needs.resolve-version.outputs.publish != 'true'
+        with:
+          name: macos-apple-silicon-dev
+          path: |
+            desktop/dist-dev/dsh-desktop-dev-mac-arm64.dmg
+            desktop/dist-dev/dsh-desktop-dev-mac-arm64.zip
+            desktop/dist-dev/dsh-desktop-dev-mac-arm64.zip.blockmap
+          if-no-files-found: error
+
+  macos-intel:
+    name: macOS Intel
+    needs: resolve-version
+    # macOS packaging needs six Apple secrets. The jobs stay here in full; set
+    # the DESKTOP_MACOS_RELEASE repository variable to 'true' once they exist.
+    if: >-
+      vars.DESKTOP_MACOS_RELEASE == 'true' &&
+      (needs.resolve-version.outputs.publish == 'true' ||
+       (github.event_name == 'workflow_dispatch' && (inputs.target == 'all' || inputs.target == 'macos')))
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Set app version
+        if: needs.resolve-version.outputs.publish == 'true'
+        # The Windows runner defaults to PowerShell, where `$APP_VERSION` is an
+        # undefined variable that expands to nothing rather than an env lookup.
+        # The three jobs keep one spelling, so this is declared in all of them.
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: npm version --no-git-tag-version --allow-same-version "$APP_VERSION"
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - name: Validate Apple release secrets
+        if: needs.resolve-version.outputs.publish == 'true'
+        env:
+          CSC_LINK: ${{ secrets.DESKTOP_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.DESKTOP_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.DESKTOP_APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.DESKTOP_APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.DESKTOP_APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.DESKTOP_APPLE_TEAM_ID }}
+        run: |
+          required=(CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY_CONTENT APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_TEAM_ID)
+          for name in "${required[@]}"; do
+            test -n "${!name}" || { echo "::error::Missing required secret: $name"; exit 1; }
+          done
+      - name: Prepare Apple notarization key
+        if: needs.resolve-version.outputs.publish == 'true'
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.DESKTOP_APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.DESKTOP_APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.DESKTOP_APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.DESKTOP_APPLE_TEAM_ID }}
+        run: |
+          key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          printf '%s' "$APPLE_API_KEY_CONTENT" > "$key_path"
+          chmod 600 "$key_path"
+          echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
+          echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID" >> "$GITHUB_ENV"
+          echo "APPLE_API_ISSUER=$APPLE_API_ISSUER" >> "$GITHUB_ENV"
+          echo "APPLE_TEAM_ID=$APPLE_TEAM_ID" >> "$GITHUB_ENV"
+      - name: Prepare macOS signing keychain
+        if: needs.resolve-version.outputs.publish == 'true'
+        id: signing_keychain
+        env:
+          CSC_LINK: ${{ secrets.DESKTOP_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.DESKTOP_CSC_KEY_PASSWORD }}
+        run: node scripts/prepare-macos-signing-keychain.mjs
+      - name: Build signed Intel package
+        if: needs.resolve-version.outputs.publish == 'true'
+        env:
+          CSC_KEYCHAIN: ${{ steps.signing_keychain.outputs.keychain }}
+        run: npm run package:mac:x64
+      - name: Build isolated Intel development package
+        if: needs.resolve-version.outputs.publish != 'true'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run package:dev:mac:x64
+      - name: Preserve Intel update metadata
+        if: needs.resolve-version.outputs.publish == 'true'
+        run: mv dist/latest-mac.yml dist/latest-mac-x64.yml
+      - name: Sign, notarize, and staple Intel DMG
+        if: needs.resolve-version.outputs.publish == 'true'
+        env:
+          CSC_KEYCHAIN: ${{ steps.signing_keychain.outputs.keychain }}
+        run: |
+          dmg_path="dist/dsh-desktop-mac-x64.dmg"
+          identity="$(security find-identity -v -p codesigning "$CSC_KEYCHAIN" | awk '/Developer ID Application/ { print $2; exit }')"
+          test -n "$identity" || { echo "::error::Developer ID Application identity not found"; exit 1; }
+          codesign --keychain "$CSC_KEYCHAIN" --sign "$identity" --timestamp --force "$dmg_path"
+          xcrun notarytool submit "$dmg_path" \
+            --key "$APPLE_API_KEY" \
+            --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait \
+            --no-s3-acceleration
+          xcrun stapler staple "$dmg_path"
+      - name: Remove temporary signing keychain
+        if: always() && needs.resolve-version.outputs.publish == 'true'
+        env:
+          SIGNING_KEYCHAIN: ${{ steps.signing_keychain.outputs.keychain }}
+          SIGNING_CERTIFICATE: ${{ steps.signing_keychain.outputs.certificate }}
+          SIGNING_KEYCHAIN_LIST: ${{ steps.signing_keychain.outputs.keychain_list }}
+        run: |
+          if [ -n "$SIGNING_KEYCHAIN_LIST" ] && [ -f "$SIGNING_KEYCHAIN_LIST" ]; then
+            keychains=()
+            while IFS= read -r keychain; do
+              test -z "$keychain" || keychains+=("$keychain")
+            done < "$SIGNING_KEYCHAIN_LIST"
+            security list-keychains -d user -s "${keychains[@]}"
+            rm -f "$SIGNING_KEYCHAIN_LIST"
+          fi
+          test -z "$SIGNING_KEYCHAIN" || security delete-keychain "$SIGNING_KEYCHAIN" || rm -f "$SIGNING_KEYCHAIN"
+          test -z "$SIGNING_CERTIFICATE" || rm -f "$SIGNING_CERTIFICATE"
+          test -z "$APPLE_API_KEY" || rm -f "$APPLE_API_KEY"
+      - name: Verify signed and notarized Intel app
+        if: needs.resolve-version.outputs.publish == 'true'
+        run: |
+          app_path="dist/mac/DSH Desktop.app"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+          xcrun stapler validate "$app_path"
+          codesign --verify --verbose=2 dist/dsh-desktop-mac-x64.dmg
+          spctl --assess --type open --context context:primary-signature --verbose=4 dist/dsh-desktop-mac-x64.dmg
+          xcrun stapler validate dist/dsh-desktop-mac-x64.dmg
+      - uses: actions/upload-artifact@v4
+        if: needs.resolve-version.outputs.publish == 'true'
+        with:
+          name: macos-intel
+          path: |
+            desktop/dist/dsh-desktop-mac-x64.dmg
+            desktop/dist/dsh-desktop-mac-x64.zip
+            desktop/dist/dsh-desktop-mac-x64.zip.blockmap
+            desktop/dist/latest-mac-x64.yml
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: needs.resolve-version.outputs.publish != 'true'
+        with:
+          name: macos-intel-dev
+          path: |
+            desktop/dist-dev/dsh-desktop-dev-mac-x64.dmg
+            desktop/dist-dev/dsh-desktop-dev-mac-x64.zip
+            desktop/dist-dev/dsh-desktop-dev-mac-x64.zip.blockmap
+          if-no-files-found: error
+
+  windows-x64:
+    name: Windows x64
+    needs: resolve-version
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' &&
+        (inputs.target == 'all' || inputs.target == 'windows' || inputs.prerelease_tag != ''))
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Set app version
+        if: needs.resolve-version.outputs.publish == 'true'
+        # The Windows runner defaults to PowerShell, where `$APP_VERSION` is an
+        # undefined variable that expands to nothing rather than an env lookup.
+        # The three jobs keep one spelling, so this is declared in all of them.
+        shell: bash
+        env:
+          APP_VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: npm version --no-git-tag-version --allow-same-version "$APP_VERSION"
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - name: Build Windows release package
+        if: needs.resolve-version.outputs.publish == 'true'
+        run: npm run package:win
+      - name: Build isolated Windows development package
+        if: needs.resolve-version.outputs.publish != 'true'
+        run: npm run package:dev:win
+      - name: Smoke test packaged Windows Harness
+        shell: pwsh
+        env:
+          SMOKE_DIR: ${{ needs.resolve-version.outputs.publish == 'true' && 'dist' || 'dist-dev' }}
+          SMOKE_CONFIG: ${{ needs.resolve-version.outputs.publish == 'true' && 'package.json' || 'electron-builder.dev.cjs' }}
+          SMOKE_USERDATA: ${{ needs.resolve-version.outputs.publish == 'true' && 'dsh-desktop' || 'dsh-desktop-dev' }}
+        run: |
+          $userData = Join-Path $env:APPDATA $env:SMOKE_USERDATA
+          $logPath = Join-Path $userData 'logs\harness.log'
+          # electron-builder names the executable after `productName`, so the
+          # name is read from the config that produced this build rather than
+          # repeated here. Renaming the product used to leave this string
+          # behind, and the smoke test then failed as a missing file — the
+          # branding pass shipped exactly that.
+          $productName = if ($env:SMOKE_CONFIG -eq 'package.json') {
+            node -p "require('./package.json').build.productName"
+          } else {
+            node -p "require('./electron-builder.dev.cjs').productName"
+          }
+          $executable = Join-Path $env:SMOKE_DIR (Join-Path 'win-unpacked' "$productName.exe")
+          if (-not (Test-Path $executable)) {
+            throw "Packaged executable not found at $executable (productName '$productName')."
+          }
+          if (Test-Path $userData) { Remove-Item -Recurse -Force $userData }
+          $desktop = Start-Process -FilePath $executable -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(75)
+            $ready = $false
+            $endpoint = $null
+            while ((Get-Date) -lt $deadline) {
+              if ($desktop.HasExited) {
+                throw "DSH Desktop Dev exited before Harness was ready (exit code $($desktop.ExitCode))."
+              }
+              if (Test-Path $logPath) {
+                $log = Get-Content -Raw $logPath
+                if (-not [string]::IsNullOrEmpty($log)) {
+                  $match = [regex]::Match($log, 'dsh web: (http://127\.0\.0\.1:\d+/\?token=[^\s]+)')
+                  if ($match.Success) {
+                    try {
+                      $authenticatedUrl = $match.Groups[1].Value
+                      $response = Invoke-WebRequest `
+                        -UseBasicParsing `
+                        -Uri $authenticatedUrl `
+                        -SessionVariable harnessSession `
+                        -TimeoutSec 2
+                      if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) {
+                        $endpoint = ([uri]$authenticatedUrl).GetLeftPart([System.UriPartial]::Authority)
+                        $ready = $true
+                        break
+                      }
+                    } catch { }
+                  }
+                }
+              }
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $ready) { throw 'Packaged Harness did not become ready within 75 seconds.' }
+
+            function Invoke-HarnessRpc([string]$endpointName, [hashtable]$request) {
+              $rpcId = [guid]::NewGuid().ToString()
+              $body = @{
+                type = 'client-request'
+                rpcId = $rpcId
+                method = $endpointName
+                payload = @{ args = @{ request = $request } }
+              } | ConvertTo-Json -Depth 8 -Compress
+              $response = Invoke-RestMethod `
+                -Method Post `
+                -Uri "$endpoint/api/$endpointName" `
+                -ContentType 'application/json; charset=utf-8' `
+                -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) `
+                -WebSession $harnessSession `
+                -TimeoutSec 30
+              if ($response.rpcId -ne $rpcId) { throw "Harness RPC id mismatch for $endpointName." }
+              if (-not $response.result.ok) {
+                throw "Harness RPC $endpointName failed: $($response.result.error.code): $($response.result.error.message)"
+              }
+              return $response.result.value
+            }
+
+            $workspacePath = Join-Path $env:RUNNER_TEMP '数据项素-工作区'
+            New-Item -ItemType Directory -Force -Path $workspacePath | Out-Null
+            $workspace = Invoke-HarnessRpc 'workspace/create' @{ path = $workspacePath }
+            $session = Invoke-HarnessRpc 'session/create' @{ workspaceId = $workspace.workspace.workspaceId }
+            if ([string]::IsNullOrWhiteSpace($session.sessionId)) {
+              throw 'Harness did not return a session id for the selected workspace.'
+            }
+
+            Start-Sleep -Seconds 20
+            $stableLog = Get-Content -Raw $logPath
+            if ($stableLog -match '\[stderr\]') {
+              throw 'Harness reported stderr after workspace and session creation.'
+            }
+            if ($stableLog -match '\[node\] Harness process exited') {
+              throw 'Harness process exited after workspace and session creation.'
+            }
+            if ($desktop.HasExited) {
+              throw "DSH Desktop Dev exited after workspace and session creation (exit code $($desktop.ExitCode))."
+            }
+            Write-Host 'Packaged Windows Harness smoke test passed.'
+          } finally {
+            if (Test-Path $logPath) {
+              Write-Host '--- harness.log ---'
+              Get-Content $logPath
+            }
+            if (-not $desktop.HasExited) { Stop-Process -Id $desktop.Id -Force }
+          }
+      - uses: actions/upload-artifact@v4
+        if: needs.resolve-version.outputs.publish == 'true'
+        with:
+          name: windows-x64-unsigned
+          path: |
+            desktop/dist/dsh-desktop-windows-x64-setup.exe
+            desktop/dist/dsh-desktop-windows-x64-setup.exe.blockmap
+            desktop/dist/latest.yml
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        if: needs.resolve-version.outputs.publish != 'true'
+        with:
+          name: windows-x64-dev
+          path: |
+            desktop/dist-dev/dsh-desktop-dev-windows-x64-setup.exe
+            desktop/dist-dev/dsh-desktop-dev-windows-x64-setup.exe.blockmap
+            desktop/dist-dev/latest.yml
+          if-no-files-found: error
+
+  sign-windows:
+    name: Sign Windows package locally with UKey
+    needs: [resolve-version, windows-x64]
+    # Signing needs the self-hosted runner and the UKey. The job stays here in
+    # full; set the DESKTOP_WINDOWS_SIGNING repository variable to 'true' once
+    # that runner is registered against this repository.
+    if: >-
+      always() &&
+      vars.DESKTOP_WINDOWS_SIGNING == 'true' &&
+      needs.resolve-version.outputs.publish == 'true' &&
+      needs.windows-x64.result == 'success'
+    runs-on: [self-hosted, macOS, ARM64]
+    env:
+      CI: 'true'
+      JSIGN_VERSION: '7.5'
+      JSIGN_SHA256: '602a51c3545a6dc4fb99bd2ea7152b26d1345916d0c93ddfbd5936cb735af91c'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install release tooling
+        run: npm ci --ignore-scripts
+      - name: Prepare unsigned Windows package
+        run: |
+          work_dir="$RUNNER_TEMP/dsh-windows-${{ github.run_id }}"
+          mkdir -p "$work_dir/release"
+          echo "WINDOWS_SIGNING_WORK_DIR=$work_dir" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64-unsigned
+          path: ${{ runner.temp }}/dsh-windows-${{ github.run_id }}/release
+      - name: Download and verify Jsign
+        run: |
+          set -euo pipefail
+          jsign_jar="$WINDOWS_SIGNING_WORK_DIR/jsign-${JSIGN_VERSION}.jar"
+          curl --fail-with-body --location --retry 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 180 \
+            --output "$jsign_jar" \
+            "https://github.com/ebourg/jsign/releases/download/${JSIGN_VERSION}/jsign-${JSIGN_VERSION}.jar"
+          test -s "$jsign_jar"
+          printf '%s  %s\n' "$JSIGN_SHA256" "$jsign_jar" | shasum -a 256 --check
+          java -jar "$jsign_jar" --version
+          echo "JSIGN_JAR=$jsign_jar" >> "$GITHUB_ENV"
+      - name: Sign Windows installer with SafeNet UKey
+        env:
+          WINDOWS_SIGNING_PIN: ${{ secrets.DESKTOP_WINDOWS_SIGNING_PIN }}
+        run: |
+          test -r /usr/local/lib/libeTPkcs11.dylib
+          test -n "$WINDOWS_SIGNING_PIN" || { echo "::error::Missing required secret: DESKTOP_WINDOWS_SIGNING_PIN"; exit 1; }
+          installer_count="$(find "$WINDOWS_SIGNING_WORK_DIR/release" -maxdepth 1 -type f -name '*.exe' | wc -l | tr -d ' ')"
+          test "$installer_count" = '1'
+          installer="$(find "$WINDOWS_SIGNING_WORK_DIR/release" -maxdepth 1 -type f -name '*.exe' -print -quit)"
+          pin_file="$(mktemp "$WINDOWS_SIGNING_WORK_DIR/jsign-pin.XXXXXX")"
+          trap 'rm -f "$pin_file"' EXIT
+          chmod 600 "$pin_file"
+          printf '%s' "$WINDOWS_SIGNING_PIN" > "$pin_file"
+          unset WINDOWS_SIGNING_PIN
+          java -jar "$JSIGN_JAR" \
+            --storetype ETOKEN \
+            --storepass "file:$pin_file" \
+            --alg SHA-256 \
+            --tsaurl http://timestamp.digicert.com \
+            --tsmode RFC3161 \
+            --tsretries 3 \
+            --tsretrywait 10 \
+            --name 'DSH Desktop' \
+            --url https://github.com/INAC-Sistemas/shiva-code \
+            --verbose \
+            "$installer"
+          java -jar "$JSIGN_JAR" extract --format DER "$installer"
+          test -s "$installer.sig"
+          rm -f "$installer.sig"
+      # Signing rewrites the installer's bytes, so the blockmap and latest.yml
+      # electron-builder produced no longer describe it.
+      - name: Rebuild Windows update metadata
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          version="${RELEASE_VERSION#v}"
+          node scripts/finalize-windows-release.mjs \
+            "$WINDOWS_SIGNING_WORK_DIR/release" \
+            "$version"
+          test -f "$WINDOWS_SIGNING_WORK_DIR/release/latest.yml"
+          test -f "$WINDOWS_SIGNING_WORK_DIR"/release/*.exe.blockmap
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: |
+            ${{ runner.temp }}/dsh-windows-${{ github.run_id }}/release/dsh-desktop-windows-x64-setup.exe
+            ${{ runner.temp }}/dsh-windows-${{ github.run_id }}/release/dsh-desktop-windows-x64-setup.exe.blockmap
+            ${{ runner.temp }}/dsh-windows-${{ github.run_id }}/release/latest.yml
+          if-no-files-found: error
+      - name: Remove local signing files
+        if: always()
+        run: |
+          case "$WINDOWS_SIGNING_WORK_DIR" in
+            "$RUNNER_TEMP"/dsh-windows-*) rm -rf "$WINDOWS_SIGNING_WORK_DIR" ;;
+            '') ;;
+            *) echo "Refusing to remove unexpected signing path: $WINDOWS_SIGNING_WORK_DIR"; exit 1 ;;
+          esac
+
+  publish:
+    name: Publish GitHub Release
+    if: >-
+      always() &&
+      needs.resolve-version.outputs.publish == 'true' &&
+      needs.resolve-version.outputs.prerelease != 'true' &&
+      needs.windows-x64.result == 'success' &&
+      needs.macos-apple-silicon.result != 'failure' &&
+      needs.macos-intel.result != 'failure' &&
+      needs.sign-windows.result != 'failure'
+    needs:
+      - resolve-version
+      - windows-x64
+      - macos-apple-silicon
+      - macos-intel
+      - sign-windows
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_TAG: ${{ needs.resolve-version.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        if: needs.macos-apple-silicon.result == 'success'
+        with:
+          pattern: macos-*
+          path: desktop/release-assets
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.resolve-version.outputs.windows_artifact }}
+          path: desktop/release-assets
+      - name: Merge macOS update metadata
+        if: needs.macos-apple-silicon.result == 'success'
+        run: |
+          set -euo pipefail
+          node scripts/merge-mac-update-metadata.mjs \
+            release-assets/latest-mac-arm64.yml \
+            release-assets/latest-mac-x64.yml \
+            release-assets/latest-mac.yml
+          find release-assets -maxdepth 1 \
+            \( -name latest-mac-arm64.yml -o -name latest-mac-x64.yml \) \
+            -delete
+      - name: Verify release assets before publication
+        run: |
+          set -euo pipefail
+          platforms=windows
+          if [ -f release-assets/latest-mac.yml ]; then platforms=windows,mac; fi
+          node scripts/verify-release-assets.mjs release-assets "$RELEASE_VERSION" \
+            --platforms "$platforms"
+      # Built before the release exists so the rollback index ships as one of
+      # its own assets rather than needing a second upload.
+      - name: Build the rollback version index
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 300 \
+            --json tagName,isDraft,isPrerelease \
+            --jq '[ .[] | select(.isDraft == false and .isPrerelease == false)
+                        | .tagName | select(startswith("shiva-desktop-v"))
+                        | ltrimstr("shiva-desktop-v") ]' > "$RUNNER_TEMP/names.json"
+          node -e 'const f=process.argv[1],fs=require("fs");
+                   const n=JSON.parse(fs.readFileSync(f,"utf8"));
+                   n.push(process.env.RELEASE_VERSION);
+                   fs.writeFileSync(f,JSON.stringify([...new Set(n)]))' "$RUNNER_TEMP/names.json"
+          node scripts/build-version-index.mjs "$RUNNER_TEMP/names.json" \
+            release-assets/versions.json
+          cat release-assets/versions.json
+      - name: Build GitHub release note prompt
+        run: |
+          set -euo pipefail
+          mkdir -p .github/release-artifacts
+          git fetch --force --tags
+          python3 .github/scripts/github_release_notes.py build-prompt \
+            --tag "$RELEASE_TAG" \
+            --output .github/release-artifacts/github-release-prompt.txt
+      - name: Generate GitHub release note
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.MODELS_TOKEN }}
+        run: |
+          set -euo pipefail
+          out=.github/release-artifacts/github-release-notes.md
+          if [ -n "${COPILOT_GITHUB_TOKEN:-}" ]; then
+            echo "Generating GitHub release note via Copilot CLI..."
+            npm install -g @github/copilot@latest || true
+            prompt="$(cat .github/release-artifacts/github-release-prompt.txt)"
+            if copilot -p "$prompt" -s --model gpt-5.6-terra --no-ask-user > "$out" 2>/dev/null && \
+               python3 .github/scripts/github_release_notes.py validate --tag "$RELEASE_TAG" --input "$out"; then
+              echo "✅ AI GitHub release note generated and validated."
+            else
+              echo "⚠️ Falling back to the deterministic GitHub release note."
+              python3 .github/scripts/github_release_notes.py generate-fallback --tag "$RELEASE_TAG" --output "$out"
+            fi
+          else
+            echo "MODELS_TOKEN not set; using the deterministic GitHub release note."
+            python3 .github/scripts/github_release_notes.py generate-fallback --tag "$RELEASE_TAG" --output "$out"
+          fi
+      - name: Create the tag and the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          notes=.github/release-artifacts/github-release-notes.md
+          # The release is named for the version it ships, not for the tag that
+          # carries it: the prefix exists to say which product released, and
+          # repeating it in the title would only be noise.
+          #
+          # --latest is what pins the update feed. Clients read
+          # releases/latest/download/latest.yml, and this repository's tag
+          # namespace is shared with the harness, so leaving "latest" to
+          # GitHub's date heuristic would let a harness release retarget every
+          # installed app. Any other release here must pass --latest=false.
+          #
+          # A tag pushed with GITHUB_TOKEN does not re-trigger workflows, so
+          # creating it here cannot loop back into this workflow.
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --target "$GITHUB_SHA" \
+            --latest \
+            --notes-file "$notes" \
+            --title "DSH Desktop v$RELEASE_VERSION" \
+            --repo "$GITHUB_REPOSITORY"
+
+  publish-prerelease:
+    name: Publish GitHub Pre-release
+    if: >-
+      always() &&
+      needs.resolve-version.outputs.prerelease == 'true' &&
+      needs.windows-x64.result == 'success' &&
+      needs.macos-apple-silicon.result != 'failure' &&
+      needs.macos-intel.result != 'failure' &&
+      needs.sign-windows.result != 'failure'
+    needs:
+      - resolve-version
+      - windows-x64
+      - macos-apple-silicon
+      - macos-intel
+      - sign-windows
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_TAG: ${{ needs.resolve-version.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        if: needs.macos-apple-silicon.result == 'success'
+        with:
+          pattern: macos-*
+          path: desktop/release-assets
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.resolve-version.outputs.windows_artifact }}
+          path: desktop/release-assets
+      - name: Merge macOS update metadata
+        if: needs.macos-apple-silicon.result == 'success'
+        run: |
+          set -euo pipefail
+          node scripts/merge-mac-update-metadata.mjs \
+            release-assets/latest-mac-arm64.yml \
+            release-assets/latest-mac-x64.yml \
+            release-assets/latest-mac.yml
+          find release-assets -maxdepth 1 \
+            \( -name latest-mac-arm64.yml -o -name latest-mac-x64.yml \) \
+            -delete
+      - name: Verify release assets before publication
+        run: |
+          set -euo pipefail
+          platforms=windows
+          if [ -f release-assets/latest-mac.yml ]; then platforms=windows,mac; fi
+          node scripts/verify-release-assets.mjs release-assets "$RELEASE_VERSION" \
+            --platforms "$platforms"
+      - name: Create the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # A pre-release must never claim the latest-release redirect:
+          # releases/latest/download/ is the update feed every installed app
+          # reads. GitHub excludes prereleases from it on its own, so the only
+          # way to break that here would be to ask for it explicitly.
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --generate-notes \
+            --title "DSH Desktop $RELEASE_TAG（预发布）" \
+            --repo "$GITHUB_REPOSITORY"

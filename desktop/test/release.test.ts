@@ -1,0 +1,695 @@
+import { readdir, readFile } from 'node:fs/promises'
+import path from 'node:path'
+import { parse } from 'yaml'
+import { describe, expect, it } from 'vitest'
+import { normalizeHtmlSource, normalizedFragment } from './html-source'
+
+const projectRoot = path.resolve(import.meta.dirname, '..')
+
+// GitHub only reads .github/workflows/ at the repository root, so the desktop
+// release workflow sits one level above this npm project.
+const releaseWorkflow = path.resolve(
+  projectRoot,
+  '../.github/workflows/desktop-release.yml'
+)
+
+const releaseAssets = [
+  'dsh-desktop-mac-arm64.dmg',
+  'dsh-desktop-mac-x64.dmg',
+  'dsh-desktop-windows-x64-setup.exe'
+]
+
+describe('GitHub release contract', () => {
+  it('keeps the package and lockfile versions aligned', async () => {
+    const packageJson = JSON.parse(
+      await readFile(path.join(projectRoot, 'package.json'), 'utf8')
+    ) as { version: string }
+    const packageLock = JSON.parse(
+      await readFile(path.join(projectRoot, 'package-lock.json'), 'utf8')
+    ) as { version: string; packages: Record<string, { version?: string }> }
+
+    expect(packageLock.version).toBe(packageJson.version)
+    expect(packageLock.packages['']?.version).toBe(packageJson.version)
+  })
+
+  it('declares required DSH peer packages as production dependencies', async () => {
+    const packageLock = JSON.parse(
+      await readFile(path.join(projectRoot, 'package-lock.json'), 'utf8')
+    ) as {
+      packages: Record<string, { dev?: boolean; peer?: boolean }>
+    }
+
+    // A lock location is a path, so nested installs read as
+    // `node_modules/<host>/node_modules/<name>`. Only the segment after the
+    // last `node_modules/` names the package: without that, a third-party peer
+    // that npm nested under a DSH package (rc.8 gives ui-trajectory its own
+    // React 19) reads as a DSH package and trips this guard.
+    const packageNameOf = (location: string): string =>
+      location.slice(location.lastIndexOf('node_modules/') + 'node_modules/'.length)
+
+    const peerOnlyRuntimePackages = Object.entries(packageLock.packages)
+      .filter(
+        ([location, metadata]) =>
+          packageNameOf(location).startsWith('@deepseek-ai/') &&
+          metadata.peer === true &&
+          metadata.dev !== true
+      )
+      .map(([location]) => packageNameOf(location))
+
+    expect(peerOnlyRuntimePackages).toEqual([])
+  })
+
+  it('vendors upstream-new closure packages as file: production deps with no registry resolution', async () => {
+    const packageJson = JSON.parse(
+      await readFile(path.join(projectRoot, 'package.json'), 'utf8')
+    ) as { dependencies: Record<string, string> }
+    const packageLockRaw = await readFile(
+      path.join(projectRoot, 'package-lock.json'),
+      'utf8'
+    )
+    const packageLock = JSON.parse(packageLockRaw) as {
+      packages: Record<string, { resolved?: string }>
+    }
+
+    // alpha.3 introduced these as transitive deps of shipped packages; they must
+    // resolve from the vendored tarballs, not registry.npmmirror.com.
+    const promotedClosurePackages = [
+      '@deepseek-ai/dsh-client-ui-schedule',
+      '@deepseek-ai/dsh-deque',
+      '@deepseek-ai/dsh-session-turn-outline',
+      '@deepseek-ai/dsh-util-time',
+      '@deepseek-ai/dsh-util-values'
+    ]
+
+    for (const packageName of promotedClosurePackages) {
+      expect(packageJson.dependencies[packageName]).toMatch(
+        /^file:packages\/harness-0\.1\.2-alpha\.4\/npm-dsh\/.+\.tgz$/
+      )
+      expect(packageLock.packages[`node_modules/${packageName}`]?.resolved).toMatch(
+        /^file:packages\/harness-0\.1\.2-alpha\.4\/npm-dsh\//
+      )
+    }
+
+    // No @deepseek-ai/dsh-* package may resolve from a remote registry URL.
+    expect(packageLockRaw).not.toMatch(
+      /"resolved":\s*"https?:\/\/[^"]*deepseek-ai[/-]dsh/
+    )
+  })
+
+  it('does not promote optional Harness providers and test support into the desktop runtime', async () => {
+    const packageJson = JSON.parse(
+      await readFile(path.join(projectRoot, 'package.json'), 'utf8')
+    ) as { dependencies: Record<string, string> }
+    const packageLock = JSON.parse(
+      await readFile(path.join(projectRoot, 'package-lock.json'), 'utf8')
+    ) as { packages: Record<string, unknown> }
+
+    const excludedHarnessPackages = [
+      '@deepseek-ai/cordis-plugin-logger-console',
+      '@deepseek-ai/dsh-agent-loop-testkit',
+      '@deepseek-ai/dsh-client-test-runtime',
+      '@deepseek-ai/dsh-client-web',
+      // upstream 0.1.2-alpha.4 moved this to packages/experimental/ (out of the
+      // dsh family tarball set); desktop continues not to bundle it.
+      '@deepseek-ai/dsh-code-runtime-python',
+      '@deepseek-ai/dsh-e2b',
+      '@deepseek-ai/dsh-fs-e2b',
+      '@deepseek-ai/dsh-llm-mock-server',
+      '@deepseek-ai/dsh-llm-replay',
+      '@deepseek-ai/dsh-loader-smoke',
+      '@deepseek-ai/dsh-lsp',
+      '@deepseek-ai/dsh-lsp-stdio',
+      '@deepseek-ai/dsh-sdk-client',
+      // NOTE: @deepseek-ai/dsh-session-persistence-sqlite was removed upstream in
+      // 0.1.2-alpha.3, so its exclusion assertion is gone. dsh-storage-sqlite is
+      // likewise no longer in the closure but its guard is kept defensively.
+      '@deepseek-ai/dsh-session-snapshot',
+      '@deepseek-ai/dsh-session-title-all-prompts-llm',
+      '@deepseek-ai/dsh-storage-sqlite',
+      '@deepseek-ai/dsh-subagent-acp',
+      '@deepseek-ai/dsh-subagent-claude-code',
+      '@deepseek-ai/dsh-subagent-codex',
+      '@deepseek-ai/dsh-subagent-dsh-sdk',
+      '@deepseek-ai/dsh-subprocess-e2b',
+      '@deepseek-ai/dsh-tool-lsp',
+      '@deepseek-ai/dsh-tool-session-query',
+      '@deepseek-ai/dsh-tool-terminal',
+      '@deepseek-ai/dsh-web-search-exa',
+      '@deepseek-ai/dsh-web-search-perplexity'
+    ]
+
+    for (const packageName of excludedHarnessPackages) {
+      expect(packageJson.dependencies[packageName]).toBeUndefined()
+      expect(packageLock.packages[`node_modules/${packageName}`]).toBeUndefined()
+    }
+    expect(packageLock.packages['node_modules/@anthropic-ai/claude-agent-sdk']).toBeUndefined()
+    expect(packageLock.packages['node_modules/@openai/codex']).toBeUndefined()
+  })
+
+  it('uses stable platform-specific artifact names', async () => {
+    const packageJson = JSON.parse(
+      await readFile(path.join(projectRoot, 'package.json'), 'utf8')
+    ) as {
+      build: {
+        artifactName: string
+        extraResources: Array<{ from: string; to: string }>
+        win: { target: Array<{ target: string; arch: string[] }> }
+        nsis: { artifactName: string; include: string }
+        portable?: unknown
+      }
+    }
+
+    expect(packageJson.build.artifactName).toBe('dsh-desktop-${os}-${arch}.${ext}')
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'build/app-icon.png',
+      to: 'icon.png'
+    })
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'build/windows-child-process-hide.mjs',
+      to: 'windows-child-process-hide.mjs'
+    })
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'build/splash.html',
+      to: 'splash.html'
+    })
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'build/dsh-loader.gif',
+      to: 'dsh-loader.gif'
+    })
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'build/dsh-loader-dark.gif',
+      to: 'dsh-loader-dark.gif'
+    })
+    expect(packageJson.build.extraResources).toContainEqual({
+      from: 'build/dsh-desktop.patch.yml',
+      to: 'dsh-desktop.patch.yml'
+    })
+    expect(packageJson.build.nsis.artifactName).toBe(
+      'dsh-desktop-windows-${arch}-setup.${ext}'
+    )
+    expect(packageJson.build.nsis.include).toBe('build/installer.nsh')
+    expect(packageJson.build.win.target).toEqual([{ target: 'nsis', arch: ['x64'] }])
+    expect(packageJson.build.portable).toBeUndefined()
+  })
+
+  it('keeps update metadata on the latest channel for pre-release versions', async () => {
+    const packageJson = JSON.parse(
+      await readFile(path.join(projectRoot, 'package.json'), 'utf8')
+    ) as { build: { detectUpdateChannel?: boolean } }
+
+    // A version like 0.8.0-rc.1 would otherwise make electron-builder write
+    // rc-mac.yml / rc.yml instead of latest-mac.yml / latest.yml, which every
+    // downstream release step expects by name.
+    expect(packageJson.build.detectUpdateChannel).toBe(false)
+  })
+
+  it('turns a selected Windows drive root into an application directory', async () => {
+    const installer = await readFile(
+      path.join(projectRoot, 'build', 'installer.nsh'),
+      'utf8'
+    )
+
+    expect(installer).toContain('!define MUI_PAGE_CUSTOMFUNCTION_SHOW DshDirectoryPageShow')
+    expect(installer).toContain('${NSD_OnChange} $DshDirectoryEdit DshDirectoryChanged')
+    expect(installer).toContain('StrCpy $3 "$0\\${APP_FILENAME}"')
+    expect(installer).toContain('StrCpy $3 "$0${APP_FILENAME}"')
+    expect(installer).toContain('${NSD_SetText} $DshDirectoryEdit $3')
+  })
+
+  it('shows a packaged startup surface and pins the Electron directory picker surface', async () => {
+    const main = await readFile(path.join(projectRoot, 'src', 'main', 'index.ts'), 'utf8')
+    const splash = normalizeHtmlSource(
+      await readFile(path.join(projectRoot, 'build', 'splash.html'), 'utf8')
+    )
+    const patch = await readFile(
+      path.join(projectRoot, 'build', 'dsh-desktop.patch.yml'),
+      'utf8'
+    )
+
+    expect(main).toContain("desktopResourcePath('splash.html')")
+    expect(main).toContain('await showSplash()')
+    expect(main).toContain("query: { theme: nativeTheme.shouldUseDarkColors ? 'dark' : 'light' }")
+    expect(main).toContain('nativeTheme.themeSource = harnessThemePreference()')
+    expect(splash).toContain('Starting Shivacode Desktop')
+    expect(splash).toContain('src="dsh-loader.gif"')
+    expect(splash).toContain('src="dsh-loader-dark.gif"')
+    expect(splash).toContain(normalizedFragment('document.documentElement.dataset.theme = splashTheme === "dark"'))
+    expect(splash).toContain(normalizedFragment(':root[data-theme="dark"]'))
+    expect(splash).toContain('brightness(2.4) saturate(0.72)')
+    expect(splash).not.toContain('filter: invert(1)')
+    expect(splash).not.toContain('class="track"')
+    expect(splash).toContain('position: fixed;')
+    expect(splash).toContain(normalizedFragment('html[data-platform="windows"] main { padding-top: 70px; }'))
+    expect(patch).not.toMatch(/id:\s*directory-picker/)
+    expect(patch).not.toContain("name: '@deepseek-ai/dsh-host-directory-picker-native'")
+    expect(patch).not.toContain("name: '@deepseek-ai/dsh-client-ui-directory-picker-native'")
+  })
+
+  it('routes manual restarts through the active plugin recovery flow', async () => {
+    const main = await readFile(path.join(projectRoot, 'src', 'main', 'index.ts'), 'utf8')
+
+    expect(main).toContain("if (failureRecoveryVisible) resolvePluginRecoveryAction('restart')")
+    expect(main).toMatch(/case 'restart-harness':\s+await restartHarness\(\)/)
+    expect(main).toContain('click: () => void restartHarness().catch(showUnexpectedError)')
+    expect(main).toContain("} else if (action === 'restart') {")
+  })
+
+  it('replays frontend plugin failures that arrive during an active recovery', async () => {
+    const main = await readFile(path.join(projectRoot, 'src', 'main', 'index.ts'), 'utf8')
+
+    expect(main).toContain("resolvePluginRecoveryAction('refresh')")
+    expect(main).toContain('if (applyPendingFrontendEvidence()) continue')
+    expect(main).toMatch(
+      /if \(failureRecoveryVisible\) \{\s+queuePendingFrontendPluginRecovery\(message\)/
+    )
+    expect(main).toContain('queueMicrotask(() => {')
+    expect(main).toContain('logs: [...rendererPluginFailureLogs]')
+  })
+
+  it('publishes update metadata for installed desktop builds', async () => {
+    const packageJson = JSON.parse(
+      await readFile(path.join(projectRoot, 'package.json'), 'utf8')
+    ) as {
+      dependencies: Record<string, string>
+      build: {
+        publish: Array<{ provider: string; url?: string; owner?: string; repo?: string }>
+        win: { verifyUpdateCodeSignature: boolean }
+      }
+    }
+    const workflow = await readFile(
+      releaseWorkflow,
+      'utf8'
+    )
+
+    expect(packageJson.dependencies['electron-updater']).toBeTruthy()
+    // The feed is this repository's own latest release. It stays on the
+    // `generic` provider because update-manager restores it that way after a
+    // rollback, and because GitHub's asset CDN answers a multi-range request
+    // with 501 — every feed must opt out of them.
+    expect(packageJson.build.publish).toEqual([
+      {
+        provider: 'generic',
+        url: 'https://github.com/INAC-Sistemas/shiva-code/releases/latest/download/',
+        useMultipleRangeRequest: false
+      }
+    ])
+    expect(packageJson.build.win.verifyUpdateCodeSignature).toBe(false)
+    for (const asset of [
+      'latest-mac-arm64.yml',
+      'latest-mac-x64.yml',
+      'latest-mac.yml',
+      'latest.yml',
+      'dsh-desktop-mac-arm64.zip.blockmap',
+      'dsh-desktop-mac-x64.zip.blockmap',
+      'dsh-desktop-windows-x64-setup.exe.blockmap'
+    ]) {
+      expect(workflow).toContain(asset)
+    }
+    expect(workflow).toContain('merge-mac-update-metadata.mjs')
+    expect(workflow).toContain('Verify release assets before publication')
+    expect(workflow).toContain('verify-release-assets.mjs release-assets')
+  })
+
+  it('keeps builder jobs from attempting implicit tag publishing', async () => {
+    const packageJson = JSON.parse(
+      await readFile(path.join(projectRoot, 'package.json'), 'utf8')
+    ) as { scripts: Record<string, string> }
+
+    for (const script of [
+      'package:mac',
+      'package:mac:arm64',
+      'package:mac:x64',
+      'package:win',
+      'package:dev:mac:arm64',
+      'package:dev:mac:x64',
+      'package:dev:win'
+    ]) {
+      expect(packageJson.scripts[script]).toContain('--publish never')
+    }
+  })
+
+  it('packages an isolated development channel from the current workspace', async () => {
+    const packageJson = JSON.parse(
+      await readFile(path.join(projectRoot, 'package.json'), 'utf8')
+    ) as { scripts: Record<string, string> }
+    const developmentConfig = await readFile(
+      path.join(projectRoot, 'electron-builder.dev.cjs'),
+      'utf8'
+    )
+    const main = await readFile(path.join(projectRoot, 'src', 'main', 'index.ts'), 'utf8')
+
+    expect(packageJson.scripts['package:dev:dir']).toContain('npm run build')
+    expect(packageJson.scripts['package:dev:dir']).toContain('electron-builder.dev.cjs')
+    expect(packageJson.scripts['package:dev:mac:arm64']).toContain('verify-target.mjs darwin arm64')
+    expect(packageJson.scripts['package:dev:mac:arm64']).toContain('electron-builder.dev.cjs')
+    expect(packageJson.scripts['package:dev:mac:x64']).toContain('verify-target.mjs darwin x64')
+    expect(packageJson.scripts['package:dev:mac:x64']).toContain('electron-builder.dev.cjs')
+    expect(packageJson.scripts['package:dev:win']).toContain('verify-target.mjs win32 x64')
+    expect(packageJson.scripts['package:dev:win']).toContain('electron-builder.dev.cjs')
+    expect(packageJson.scripts['package:dev:win']).toContain('--publish never')
+    expect(developmentConfig).toContain("appId: 'io.dsh.desktop.dev'")
+    expect(developmentConfig).toContain("productName: 'DSH Desktop Dev'")
+    expect(developmentConfig).toContain("output: 'dist-dev'")
+    expect(developmentConfig).toContain("dshDesktopChannel: 'development'")
+    expect(developmentConfig).toContain(
+      "artifactName: 'dsh-desktop-dev-${os}-${arch}.${ext}'"
+    )
+    expect(developmentConfig).toContain(
+      "artifactName: 'dsh-desktop-dev-windows-${arch}-setup.${ext}'"
+    )
+    expect(main).toContain("app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop-dev'))")
+    expect(main).toContain("app.setPath('userData', join(app.getPath('appData'), 'dsh-desktop'))")
+    expect(main).toContain('if (!developmentBuild)')
+  })
+
+  it('builds and publishes every supported platform', async () => {
+    const workflow = await readFile(
+      releaseWorkflow,
+      'utf8'
+    )
+
+    expect(workflow).toContain('runs-on: macos-15')
+    expect(workflow).toContain('runs-on: macos-15-intel')
+    expect(workflow).toContain('runs-on: windows-2022')
+    expect(workflow).toContain('npm run package:dev:win')
+    expect(workflow).toContain('Smoke test packaged Windows Harness')
+    expect(workflow).toContain("node -p \"require('./package.json').build.productName\"")
+    expect(workflow).toContain("node -p \"require('./electron-builder.dev.cjs').productName\"")
+    expect(workflow).toContain('if (-not [string]::IsNullOrEmpty($log))')
+    expect(workflow).toContain("dsh web: (http://127\\.0\\.0\\.1:\\d+/\\?token=[^\\s]+)")
+    expect(workflow).toContain('-SessionVariable harnessSession')
+    expect(workflow).toContain('-WebSession $harnessSession')
+    expect(workflow).toContain('Packaged Windows Harness smoke test passed.')
+    expect(workflow).toContain('payload = @{ args = @{ request = $request } }')
+    expect(workflow).toContain("Invoke-HarnessRpc 'workspace/create'")
+    expect(workflow).toContain("Invoke-HarnessRpc 'session/create'")
+    expect(workflow).toContain('Harness process exited after workspace and session creation.')
+    expect(workflow).toContain('prerelease_tag:')
+    expect(workflow).toContain('--prerelease')
+    expect(workflow).toContain('name: windows-x64-dev')
+    expect(workflow).toContain('dist-dev/dsh-desktop-dev-windows-x64-setup.exe')
+    for (const asset of releaseAssets) expect(workflow).toContain(asset)
+    // One job resolves the version; every builder reads that output rather
+    // than re-deriving it from the ref.
+    expect(
+      workflow.match(
+        /npm version --no-git-tag-version --allow-same-version "\$APP_VERSION"/g
+      )
+    ).toHaveLength(3)
+    expect(workflow).not.toContain('GITHUB_REF_NAME#shiva-desktop-v')
+    expect(
+      workflow.match(/APP_VERSION: \$\{\{ needs\.resolve-version\.outputs\.version \}\}/g)
+    ).toHaveLength(3)
+  })
+
+  it('resolves one version for the whole run and refuses to reuse a tag', async () => {
+    const workflow = await readFile(releaseWorkflow, 'utf8')
+
+    // A push to master releases; the patch digit is automatic and
+    // desktop/package.json is the minor/major knob that also seeds it.
+    expect(workflow).toMatch(/resolve-version:\r?\n\s+name: Resolve release version/)
+    expect(workflow).toContain("git tag --list 'shiva-desktop-v*'")
+    expect(workflow).toContain('package_version="$(node -p "require(\'./package.json\').version")"')
+    expect(workflow).toContain('$3 + 1')
+    expect(workflow).toContain('A published version is never')
+    // The job inherits defaults.run.working-directory: desktop, so it cannot
+    // run a single step without checking the repository out first.
+    expect(workflow).toMatch(/resolve-version:[\s\S]*?uses: actions\/checkout@v4[\s\S]*?id: resolve/)
+
+    // A push to master releases, and only the default branch does, so a
+    // release is never cut from an integration branch by accident.
+    const { on } = parse(workflow) as {
+      on: { push: { branches: string[]; paths: string[]; tags?: string[] } }
+    }
+    expect(on.push.branches).toEqual(['master'])
+    // No tag trigger: `paths` on a push block filters tag pushes too, and the
+    // publish job is what creates the tag now.
+    expect(on.push.tags).toBeUndefined()
+    // Doc, test, and Markdown edits must not push an update card to every
+    // installed app.
+    expect(on.push.paths).toContain('!desktop/docs/**')
+    expect(on.push.paths).toContain('!desktop/test/**')
+    expect(on.push.paths).toContain('!desktop/**/*.md')
+
+    // A pre-release is tagged with a bare semver; only a stable release carries
+    // the product prefix, and the update feed reads stable releases.
+    expect(workflow).toContain(
+      `if [ "$prerelease" = 'true' ]; then tag="$version"; else tag="shiva-desktop-v$version"; fi`
+    )
+
+    // github.ref_name is `master` on a push, not a tag, so no step may read it:
+    // release notes and the release title both name the resolved tag.
+    expect(workflow).not.toContain('github.ref_name')
+    expect(
+      workflow.match(/RELEASE_TAG: \$\{\{ needs\.resolve-version\.outputs\.tag \}\}/g)
+    ).toHaveLength(2)
+  })
+
+  it('signs and notarizes both macOS architectures on tag releases', async () => {
+    const workflow = await readFile(
+      releaseWorkflow,
+      'utf8'
+    )
+
+    for (const secret of [
+      'DESKTOP_CSC_LINK',
+      'DESKTOP_CSC_KEY_PASSWORD',
+      'DESKTOP_APPLE_API_KEY',
+      'DESKTOP_APPLE_API_KEY_ID',
+      'DESKTOP_APPLE_API_ISSUER',
+      'DESKTOP_APPLE_TEAM_ID'
+    ]) {
+      expect(workflow).toContain(`secrets.${secret}`)
+    }
+    expect(workflow.match(/Prepare macOS signing keychain/g)).toHaveLength(2)
+    expect(workflow.match(/xcrun stapler validate/g)).toHaveLength(4)
+    expect(workflow.match(/xcrun notarytool submit/g)).toHaveLength(2)
+    expect(workflow.match(/CSC_IDENTITY_AUTO_DISCOVERY: 'false'/g)).toHaveLength(2)
+    expect(workflow).not.toContain("CSC_LINK: ''")
+    expect(workflow).toMatch(
+      /macos-apple-silicon:\r?\n\s+name: macOS Apple Silicon\r?\n(?:[\s\S]*?)runs-on: macos-15\r?\n\s+steps:/
+    )
+    expect(workflow).toMatch(
+      /macos-intel:\r?\n\s+name: macOS Intel\r?\n(?:[\s\S]*?)runs-on: macos-15-intel\r?\n\s+steps:/
+    )
+    expect(workflow).toMatch(
+      /windows-x64:\r?\n\s+name: Windows x64\r?\n(?:[\s\S]*?)runs-on: windows-2022\r?\n\s+steps:/
+    )
+  })
+
+  it('signs Windows installers on the local UKey runner before publishing', async () => {
+    const workflow = await readFile(
+      releaseWorkflow,
+      'utf8'
+    )
+
+    expect(workflow).toContain('name: windows-x64-unsigned')
+    expect(workflow).toContain('Sign Windows package locally with UKey')
+    expect(workflow).toContain('runs-on: [self-hosted, macOS, ARM64]')
+    expect(workflow).toContain('--storetype ETOKEN')
+    expect(workflow).toContain('--storepass "file:$pin_file"')
+    expect(workflow).toContain('--tsmode RFC3161')
+    expect(workflow).toContain('secrets.DESKTOP_WINDOWS_SIGNING_PIN')
+    expect(workflow).toContain(`printf '%s' "$WINDOWS_SIGNING_PIN" > "$pin_file"`)
+    expect(workflow).toContain('unset WINDOWS_SIGNING_PIN')
+    expect(workflow).not.toContain('security find-generic-password')
+    expect(workflow).not.toContain('WINDOWS_SIGNING_KEYCHAIN_SERVICE')
+    expect(workflow).toContain('finalize-windows-release.mjs')
+    expect(workflow).toContain('version="${RELEASE_VERSION#v}"')
+    expect(workflow).toContain('pattern: macos-*')
+    // Signing needs a self-hosted runner and the UKey, neither of which this
+    // repository has yet. The job stays here in full behind a repository
+    // variable, so turning it back on is a configuration change.
+    expect(workflow).toMatch(
+      /sign-windows:[\s\S]*?vars\.DESKTOP_WINDOWS_SIGNING == 'true'/
+    )
+    expect(workflow).toMatch(
+      /macos-apple-silicon:[\s\S]*?vars\.DESKTOP_MACOS_RELEASE == 'true'/
+    )
+    expect(workflow).toMatch(/macos-intel:[\s\S]*?vars\.DESKTOP_MACOS_RELEASE == 'true'/)
+    // A skipped signing job must not block an unsigned release, but a failed
+    // one still must.
+    expect(workflow).toMatch(
+      /publish:[\s\S]*?needs\.sign-windows\.result != 'failure'[\s\S]*?- sign-windows/
+    )
+    // Whichever job produced the installer last owns the artifact name.
+    expect(workflow).toContain("echo 'windows_artifact=windows-x64' >> \"$GITHUB_OUTPUT\"")
+    expect(workflow).toContain(
+      "echo 'windows_artifact=windows-x64-unsigned' >> \"$GITHUB_OUTPUT\""
+    )
+    expect(
+      workflow.match(
+        /name: \$\{\{ needs\.resolve-version\.outputs\.windows_artifact \}\}/g
+      )
+    ).toHaveLength(2)
+  })
+
+  it('declares a shell for every POSIX step in the Windows job', async () => {
+    const workflow = parse(await readFile(releaseWorkflow, 'utf8')) as {
+      jobs: Record<string, { steps: Array<{ name?: string; run?: string; shell?: string }> }>
+    }
+
+    // The Windows runner defaults to PowerShell, where `$VAR` is an undefined
+    // variable that expands to nothing instead of reading the environment. A
+    // step written as shell script must therefore say which shell it wants.
+    const windows = workflow.jobs['windows-x64']
+    if (!windows) throw new Error('the workflow has no windows-x64 job')
+    const undeclared = windows.steps
+      .filter((step) => step.run && !step.shell)
+      .filter((step) => /\$\{?[A-Za-z_]|\bset -|\|\||&&/.test(step.run ?? ''))
+      .map((step) => step.name ?? '(unnamed)')
+
+    expect(undeclared).toEqual([])
+  })
+
+  it('is the only workflow that runs without being asked', async () => {
+    const dir = path.resolve(projectRoot, '../.github/workflows')
+    const automatic: string[] = []
+
+    for (const file of await readdir(dir)) {
+      const { on } = parse(await readFile(path.join(dir, file), 'utf8')) as {
+        on: Record<string, unknown>
+      }
+      // workflow_call is a workflow being reused by another, not a trigger of
+      // its own; workflow_dispatch is somebody pressing the button.
+      const triggers = Object.keys(on).filter(
+        (key) => key !== 'workflow_dispatch' && key !== 'workflow_call'
+      )
+      if (triggers.length > 0) automatic.push(`${file}: ${triggers.join(', ')}`)
+    }
+
+    // The harness workflows need upstream infrastructure this fork does not
+    // have, so they only ever ran to fail. Releasing the desktop app is the one
+    // thing that must happen on its own.
+    expect(automatic).toEqual(['desktop-release.yml: push'])
+  })
+
+  it('pins the update feed to the desktop release', async () => {
+    const workflow = await readFile(releaseWorkflow, 'utf8')
+
+    // Clients read releases/latest/download/latest.yml. This repository shares
+    // its tag namespace with the harness, so "latest" must be stated, never
+    // left to GitHub's date heuristic — and a pre-release must never claim it.
+    const publishJob = workflow.slice(
+      workflow.indexOf('\n  publish:'),
+      workflow.indexOf('\n  publish-prerelease:')
+    )
+    expect(publishJob).toContain('--latest')
+    const prereleaseJob = workflow.slice(workflow.indexOf('\n  publish-prerelease:'))
+    expect(prereleaseJob).toContain('--prerelease')
+    expect(prereleaseJob).not.toContain('--latest')
+
+    // Any other release published from this repository would steal the feed.
+    const workflows = await readdir(path.resolve(projectRoot, '../.github/workflows'))
+    for (const file of workflows) {
+      const yml = await readFile(
+        path.resolve(projectRoot, '../.github/workflows', file),
+        'utf8'
+      )
+      for (const line of yml.split('\n')) {
+        if (!line.includes('gh release create')) continue
+        expect(
+          file === 'desktop-release.yml',
+          `${file} creates a GitHub Release and would retarget the update feed`
+        ).toBe(true)
+      }
+    }
+  })
+
+  it('routes the published download through the official website', async () => {
+    const readmes = await Promise.all(
+      ['README.md', 'README.zh.md'].map((file) =>
+        readFile(path.join(projectRoot, file), 'utf8')
+      )
+    )
+
+    for (const readme of readmes) {
+      expect(readme).toContain(
+        'https://github.com/INAC-Sistemas/shiva-code/releases/latest'
+      )
+      // The vendor's site does not serve our builds.
+      expect(readme).not.toContain('dshdesktop.com/#download')
+      expect(readme).not.toContain('github.com/dataelement/dsh-desktop/releases')
+      expect(readme).not.toContain('Coming soon')
+      expect(readme).not.toContain('即将发布')
+    }
+  })
+})
+
+describe('prerelease parity workflow', () => {
+  const load = () =>
+    readFile(releaseWorkflow, 'utf8')
+
+  it('replaces the windows-only prerelease input with a general one', async () => {
+    const yml = await load()
+    expect(yml).toContain('prerelease_tag:')
+    expect(yml).not.toContain('windows_prerelease_tag')
+    expect(yml).not.toContain('Publish validated Windows development pre-release')
+  })
+
+  it('gates both publish jobs so prerelease and release never overlap', async () => {
+    const yml = await load()
+    expect(yml).toContain('publish-prerelease:')
+    expect(yml).toMatch(
+      /publish:[\s\S]*needs\.resolve-version\.outputs\.prerelease != 'true'/
+    )
+    expect(yml).toMatch(
+      /publish-prerelease:[\s\S]*needs\.resolve-version\.outputs\.prerelease == 'true'/
+    )
+  })
+
+  it('derives the Windows smoke test executable from the build config', async () => {
+    const yml = await load()
+    expect(yml).toContain('SMOKE_DIR')
+    expect(yml).toContain('SMOKE_CONFIG')
+    expect(yml).toContain('SMOKE_USERDATA')
+    // The executable is named after `productName`; pinning the name here as a
+    // literal is what let the branding rename ship a smoke test that looked
+    // for a file the build no longer produces.
+    expect(yml).not.toContain('DSH Desktop.exe')
+    expect(yml).toContain('Packaged executable not found at $executable')
+  })
+})
+
+describe('rollback catalog publication', () => {
+  it('ships the version index as an asset of the release it describes', async () => {
+    const yml = await readFile(releaseWorkflow, 'utf8')
+    // Each release is its own immutable archive, so the index is rebuilt from
+    // the releases that exist rather than from a mirror that could drift.
+    expect(yml).toContain('gh release list')
+    expect(yml).toContain('scripts/build-version-index.mjs')
+    expect(yml).toContain('release-assets/versions.json')
+    // Built before the release exists, so it uploads with everything else.
+    expect(yml).toMatch(
+      /Build the rollback version index[\s\S]*?Create the tag and the release/
+    )
+  })
+})
+
+describe('AI-organized GitHub release body', () => {
+  const load = () =>
+    readFile(releaseWorkflow, 'utf8')
+
+  it('drops --generate-notes for the real release and uses a notes file', async () => {
+    const yml = await load()
+    const publishJob = yml.slice(
+      yml.indexOf('\n  publish:'),
+      yml.indexOf('\n  publish-prerelease:')
+    )
+    expect(publishJob).not.toContain('--generate-notes')
+    expect(publishJob).toContain('--notes-file')
+    expect(publishJob).toContain('github_release_notes.py')
+    expect(publishJob).toContain('github-release-notes.md')
+  })
+
+  it('still lets the prerelease job use --generate-notes', async () => {
+    const yml = await load()
+    const preJob = yml.slice(yml.indexOf('\n  publish-prerelease:'))
+    expect(preJob).toContain('--generate-notes')
+  })
+
+  it('ships a RELEASE_NOTES.md style reference', async () => {
+    const notes = await readFile(path.join(projectRoot, 'RELEASE_NOTES.md'), 'utf8')
+    expect(notes.startsWith('# ')).toBe(true)
+  })
+})

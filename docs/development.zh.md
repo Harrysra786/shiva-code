@@ -60,7 +60,7 @@ pnpm run typecheck
 | 文件 | 角色 | 是否构成 program？ |
 |---|---|---|
 | `tsconfig.json` | solution 根：`extends` base、`files: []`、引用两个 aggregate。它是 tsserver 发现入口，也是显式执行整张 Project Reference 图时的入口；经继承的 `paths` 充当 tsx 运行 `scripts/` 时的解析配置。 | 否 |
-| `tsconfig.host.json` | Host aggregate：Host 包、示例、测试、脚本和 website，以及 `api/remotes` 的 Host 特例 project。 | 是 |
+| `tsconfig.host.json` | Host aggregate：Host 包、示例、测试和脚本，以及 `api/remotes` 的 Host 特例 project。 | 是 |
 | `tsconfig.client.json` | Client aggregate：`packages/client/*` 包及其测试、`apps/web`，以及 `api/remotes` 的 Client 特例 project。 | 是 |
 | `tsconfig.base.json` | 共享 compilerOptions 与源码 `paths` 映射。同时是各 vitest 配置让 vite-tsconfig-paths 指向的解析门面：它没有 `include`，因此其 `paths` 适用于任何 importer。 | 否 |
 | `tsconfig.base.client.json` | 浏览器编译设置（`jsx`、DOM lib、`types: []`），由 Client aggregate 和每个 `packages/client/*` 包 extends。 | 否 |
@@ -87,7 +87,7 @@ pnpm run build:web
 
 Typert 只在 Host tsdown 中以 `tsconfig.host.json` 为种子运行。它分析 Host 类型并生成 Host 反射产物及 Host-for-Client Remote 投影；Client tsdown 不启动 Typert。`pnpm run typecheck` 因此先执行完整 Host lib 阶段，再运行 Client tsc；`pnpm run build` 继续执行 Client tsdown 和 Web 构建。
 
-`pnpm run build` 会内联根包版本、七位源码 commit，并在 Git 报告本地变化时内联 dirty 标记；调用方提供的其他 `DSH_CLIENT_*` 值也会被继承。`pnpm run build:official` 是与 CI 和 release 产物构建等价的跨平台本地命令，并省略本地 dirty 标记。每次完整构建成功后都会写入一份被 gitignore 的记录，把精确公开值与 Vite 输出及动态 client bundle 绑定；release 打包和 built Web 测试会拒绝缺少记录或被后续局部构建改动的产物。`pnpm run dev:web` 仍需要先执行完整构建来准备产物树，但会在启动时读取一次当前版本和 Git 状态，并在本次会话的所有 watcher stage 之间共享该环境；它不会校验完整构建记录，因为 watcher stage 会重写记录覆盖的产物。
+`pnpm run build` 会内联根包版本、七位源码 commit，并在 Git 报告本地变化时内联 dirty 标记；调用方提供的其他 `DSH_CLIENT_*` 值也会被继承。`pnpm run build:official` 是与 CI 和 release 产物构建等价的跨平台本地命令，并省略本地 dirty 标记。每次完整构建成功后都会写入一份被 gitignore 的记录，把精确公开值与 Vite 输出及动态 client bundle 绑定；release 打包和 built Web 测试会拒绝缺少记录或被后续局部构建改动的产物。
 
 静态分析和测试通过 base 的 `paths` 映射把工作区 import 解析到 `src`，且必须在干净树上通过；消费构建产物 `lib/` 的门禁显式声明该依赖。生成的 Host-for-Client Remote 声明是有意设置的例外：公共 `typecheck`、`lint` 和 `doc-typecheck` 命令会先生成这些声明，而内部 `*:contracts-ready` 脚本假定调用它的公共命令或调度器门禁已经依赖 Typert 约定生成阶段或完整构建。tsc-first 发射职责见 [ts-build-config Note](../.agents/notes/implemented/process/2026-06-17-ts-build-config.zh.md)，门禁准备约定见 [Typert Remote Agent Note](../.agents/notes/implemented/architecture/2026-08-02-typert-remote-method-calls.zh.md)。
 

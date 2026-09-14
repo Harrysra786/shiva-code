@@ -6,23 +6,9 @@
 name: Node Addon System
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/node-addon-system.yml'
-      - '.github/workflows/node-addon-system-release.yml'
-      - 'native/system/**'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
-  push:
-    branches: [master]
-    paths:
-      - '.github/workflows/node-addon-system.yml'
-      - '.github/workflows/node-addon-system-release.yml'
-      - 'native/system/**'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
+  # Automatic triggers are off in this fork: the harness workflows need
+  # upstream infrastructure this repository does not have, and only the
+  # desktop release runs on its own. Run this by hand when it is needed.
   workflow_dispatch:
 
 concurrency:

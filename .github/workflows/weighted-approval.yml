@@ -1,11 +1,10 @@
 name: weighted-approval
 
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
-  workflow_run:
-    workflows: [weighted-approval-review-event]
-    types: [completed]
+  # Automatic triggers are off in this fork: the harness workflows need
+  # upstream infrastructure this repository does not have, and only the
+  # desktop release runs on its own. Run this by hand when it is needed.
+  workflow_dispatch:
 
 permissions:
   contents: read

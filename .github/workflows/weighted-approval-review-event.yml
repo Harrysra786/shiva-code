@@ -2,8 +2,10 @@ name: weighted-approval-review-event
 run-name: weighted-approval-review-event:${{ github.event.pull_request.number }}
 
 on:
-  pull_request_review:
-    types: [submitted, edited, dismissed]
+  # Automatic triggers are off in this fork: the harness workflows need
+  # upstream infrastructure this repository does not have, and only the
+  # desktop release runs on its own. Run this by hand when it is needed.
+  workflow_dispatch:
 
 permissions: {}
 

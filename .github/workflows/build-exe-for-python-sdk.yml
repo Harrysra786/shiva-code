@@ -9,6 +9,9 @@ name: Build single-exe
 # list gray skipped checks on every unrelated PR label event. Checkout uses the
 # triggering ref, so dispatch needs no separate ref input.
 on:
+  # Automatic triggers are off in this fork: the harness workflows need
+  # upstream infrastructure this repository does not have, and only the
+  # desktop release runs on its own. Run this by hand when it is needed.
   workflow_call:
     inputs:
       targets:

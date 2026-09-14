@@ -6,12 +6,11 @@ name: Build PR preview
 # platform access to this repository's sources.
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  # Automatic triggers are off in this fork: the harness workflows need
+  # upstream infrastructure this repository does not have, and only the
+  # desktop release runs on its own. Run this by hand when it is needed.
+  workflow_dispatch:
 
-# Within one pull request the newest build wins. Across pull requests there is
-# nothing to serialize: each uploads to its own branch alias, so two deployments
-# never contend for the same URL.
 concurrency:
   group: build-preview-cloudflare-${{ github.event.pull_request.number }}
   cancel-in-progress: true

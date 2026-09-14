@@ -1,8 +1,9 @@
 name: CI master
 
 on:
-  push:
-    branches: [master]
+  # Automatic triggers are off in this fork: the harness workflows need
+  # upstream infrastructure this repository does not have, and only the
+  # desktop release runs on its own. Run this by hand when it is needed.
   workflow_dispatch:
     inputs:
       suite:
@@ -383,9 +384,9 @@ jobs:
         if: matrix.platform == 'linux'
         run: pnpm run typecheck
 
-      - name: Run critical Windows production-site lane
+      - name: Run critical Windows build lane
         if: matrix.platform == 'windows'
-        run: pnpm run docs:build
+        run: pnpm run build
 
   # Manual comparison of the intended low-fanout topology. Linux runs the
   # complete unsharded primary aggregate with bounded in-runner parallelism;

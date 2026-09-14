@@ -1,0 +1,193 @@
+# Keep the stock directory-picker (auto) row active: the native backend
+# serves ctx.directoryPicker, so host-side consumers (host.pickDirectory,
+# plugins reading the seam) work unmodified. The client surface keeps its
+# Electron-dialog bridge via the client-ui patch in patches/.
+
+# Disable the stock single-slot occupant before mounting Desktop's equivalent;
+# two occupants cannot share either brand seat. The Desktop plugin preserves
+# the stock conversation mark. The phone remains in the settings row because
+# the public footer-action slot is a separate row. Window chrome geometry
+# remains a native-shell concern.
+- id: ui-brand-official
+  disabled: true
+
+- insert:
+    - id: dsh-desktop-client-ui
+      name: dsh-desktop-client-ui
+
+    # DSH Desktop owns the fixed-target dsh-market installer and its lightweight
+    # settings entry. After dshmarket is installed and Harness restarts, the
+    # community plugin replaces the placeholder with its complete market UI.
+    - id: dsh-desktop-market-installer
+      name: dsh-desktop-market-installer
+
+# dsh-market normally offers to restart its own Node process after mutations.
+# The desktop shell has the real lifecycle authority, so keep that behavior off
+# whenever the optional plugin is present in the composed profile.
+- id: dsh-market
+  inject: [desktopProfiles]
+  config:
+    profile: web
+    allowRestart: false
+
+# Harness creates the full Cordis HMR service after boot when no `hmr` service
+# exists, and that service throws without Node's internal module loader —
+# which a packaged Electron app cannot provide, so every signed macOS launch
+# failed profile boot at that step. This row supplies the config-watching
+# subset `watchUserPatches` actually needs; where the internals are reachable
+# it stands aside and the real service loads unchanged.
+- insert:
+    - id: dsh-desktop-hmr-fallback
+      name: dsh-desktop-hmr-fallback
+
+# Preset package export and import. These two routes lived in a patch on
+# dsh-host-apiproxy until 0.1.2-alpha.1 deleted that package; upstream ships no
+# preset transfer of its own, so the capability moved into a desktop plugin
+# that registers on the Connection fetch-route seam instead.
+- insert:
+    - id: dsh-desktop-preset-transfer
+      name: dsh-desktop-preset-transfer
+
+# shiva-code's own generic UI plugins, packed into
+# packages/harness-0.1.2-alpha.4/npm-shiva-plugins/ the same way the
+# @deepseek-ai/dsh-* set is packed into npm-dsh/. dsh-user-menu hard-injects
+# 'loginSession' (an inner feature, not its top-level dsh.client.inject row),
+# provided only by dsh-login — so dsh-login is included too, even though it
+# is the one plugin here that authenticates against the plugin-manager VPS.
+# dsh-vps-status, dsh-prototype, and dsh-skill-library also authenticate
+# through dsh-login (each reads the session it records; none carries its own
+# credential) and are included on the same basis. dsh-mds, dsh-profiles, and
+# dsh-skill-manager carry no VPS dependency at all.
+#
+# dsh-vps-status and dsh-skill-library are NOT rows here: they contribute only
+# to the `tools` and `skills` registries, so a host row files them into the
+# GLOBAL layer, which every agent reads regardless of preset. They moved to the
+# `profile` agent preset, where the same registration lands in that preset's
+# layer. `verify-cordis-config` fails the build if either comes back.
+#
+# Every remaining OPTIONAL row below carries a `disabled` expression over
+# `$DSH_PROFILE_PLUGINS`, the active profile's plugin list, injected by
+# harness-runtime.ts at spawn. A host-plane plugin serves routes and publishes
+# services, so it can only be turned off by not loading — which is decided at
+# boot, and is why changing these costs an app restart. ABSENT means everything
+# enabled: a first boot before any login, dev, and the CLI must all still work.
+# That fail-open is only acceptable because the plane the MODEL sees fails
+# closed — an agent that joins no preset resolves the empty global layer.
+#
+# Not gated, deliberately: dsh-better-sidebar (the chassis every other tab plugs
+# into), dsh-i18n, dsh-shiva-theme, dsh-clock, dsh-user-menu, login and
+# profiles — without the last two there is no way back to a picker.
+#
+# dsh-openviking (the
+# "Memory" sidebar tab) auto-installs a Python venv and spawns a Python
+# server at runtime — a platform dependency this Node/Electron-only
+# executable does not itself carry — so scripts/install-python-runtime.mjs
+# stages a portable, pip-ready CPython into win.extraResources for exactly
+# this plugin to use; see its own `config.pythonCandidates` entry below.
+# Still excluded: dsh-ssh-tunnel (pulls in a real third-party npm
+# dependency, ssh2, not yet verified to install cleanly on every packaged
+# target).
+# dsh-better-sidebar goes first: the rest only soft-inject it (ctx.inject /
+# ctx.get, never a hard `inject` row), so nothing here blocks on order, but
+# the base plugin reads first. Excluded by choice: dsh-flowglass (published
+# 0.4.4), dsh-sidebar-qa, and dsh-docs-panel.
+- insert:
+    - id: dsh-better-sidebar
+      name: dsh-better-sidebar
+    - id: dsh-i18n
+      name: dsh-i18n
+    - id: dsh-clock
+      name: dsh-clock
+    - id: dsh-shiva-theme
+      name: dsh-shiva-theme
+    - id: dsh-user-menu
+      name: dsh-user-menu
+
+    # Config replicated verbatim from dsh-login's own cordis.patch.yml (the
+    # bundle patch a `dsh.profile.bundles` entry would apply automatically —
+    # this profile never adds one, so the shape is reproduced here instead).
+    # $VPS_URL comes from harness-runtime.ts's buildHarnessSpawnOptions,
+    # defaulting to the production plugin-manager
+    # (https://shivaplugins.grupoinac.com.br) for this shipped build.
+    - id: login
+      name: dsh-login
+      config:
+        endpoint: !!js "new URL('/api/auth/login', process.env.VPS_URL).href"
+        logoutEndpoint: !!js "new URL('/api/auth/logout', process.env.VPS_URL).href"
+        validateEndpoint: !!js "new URL('/api/auth/me', process.env.VPS_URL).href"
+        title: Entrar
+        subtitle: Faça login para usar o Shiva Code.
+        identifierLabel: E-mail
+        passwordLabel: Senha
+        submitLabel: Entrar
+
+    - id: mds
+      name: dsh-mds
+      disabled: !!js "!(process.env.DSH_PROFILE_PLUGINS ?? 'dsh-mds').split(',').includes('dsh-mds')"
+
+    - id: assets
+      name: dsh-assets
+    - id: 9router
+      name: 9router-app
+
+    # Keyless web search: registers a DuckDuckGo provider on the harness web
+    # seam, so the agents' native web_search works with no API key.
+    - id: web-search
+      name: dsh-web-search
+
+    # SSH to external VPS servers: one-click paramiko install into a dedicated
+    # venv plus the agents' ssh_run/ssh_transfer tools.
+    - id: paramiko
+      name: dsh-paramiko
+
+    # CLI provider connections (install the CLI, log in, manage this
+    # workspace's link): GitHub, Supabase, Railway and Vercel tabs.
+    - id: github
+      name: dsh-github
+    - id: supabase
+      name: dsh-supabase
+    - id: railway
+      name: dsh-railway
+    - id: vercel
+      name: dsh-vercel
+
+    # `profiles` is never gated: it is the plugin that reads the roster and lets
+    # a person pick, so gating it would remove the only way out of a bad choice.
+    - id: profiles
+      name: dsh-profiles
+      config:
+        profilesEndpoint: !!js "new URL('/api/profiles', process.env.VPS_URL).href"
+        activeEndpoint: !!js "new URL('/api/profiles/active', process.env.VPS_URL).href"
+        specEndpoint: !!js "new URL('/api/plugins/profile', process.env.VPS_URL).href"
+        catalogEndpoint: !!js "new URL('/api/profiles/catalog', process.env.VPS_URL).href"
+
+    - id: skill-manager
+      name: dsh-skill-manager
+      disabled: !!js "!(process.env.DSH_PROFILE_PLUGINS ?? 'dsh-skill-manager').split(',').includes('dsh-skill-manager')"
+
+    # Reads the session dsh-login records (no credential of its own), same
+    # $VPS_URL contract as the login row above — config replicated verbatim from
+    # the plugin's own cordis.patch.yml.
+    - id: prototype
+      name: dsh-prototype
+      disabled: !!js "!(process.env.DSH_PROFILE_PLUGINS ?? 'dsh-prototype').split(',').includes('dsh-prototype')"
+      config:
+        endpoint: !!js "new URL('/api/plugins/prototype', process.env.VPS_URL).href"
+
+    # $DSH_OPENVIKING_PYTHON comes from harness-runtime.ts's
+    # buildHarnessSpawnOptions — set only on a packaged win32 build, where
+    # scripts/install-python-runtime.mjs staged a portable CPython into
+    # win.extraResources (src/main/index.ts's bundledPythonPath()). Listing
+    # it first (best candidate) still leaves the plugin's own default
+    # win32 search (the four entries after it, copied from
+    # PLATFORM_INTERPRETERS.win32 in dsh-openviking's own lib/index.js) as a
+    # fallback if that bundled interpreter is somehow absent or broken;
+    # config.pythonCandidates fully replaces the plugin's default candidate
+    # list when non-empty, so the fallback has to be spelled out here rather
+    # than left implicit. Everywhere else (dev, mac, unset env) this
+    # evaluates to [], which leaves the plugin's own default untouched.
+    - id: openviking
+      name: dsh-openviking
+      disabled: !!js "!(process.env.DSH_PROFILE_PLUGINS ?? 'dsh-openviking').split(',').includes('dsh-openviking')"
+      config:
+        pythonCandidates: !!js "process.env.DSH_OPENVIKING_PYTHON ? [process.env.DSH_OPENVIKING_PYTHON, 'py -3.12', 'py -3.11', 'py -3.10', 'python'] : []"

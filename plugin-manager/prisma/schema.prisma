@@ -1,0 +1,213 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  GUEST
+}
+
+/// Lista de bloqueio dos tokens de API revogados pelo logout.
+///
+/// O token é um JWT: o servidor não guarda os emitidos, então a única forma de
+/// invalidar um antes da expiração é registrar aqui o `jti` dele. Linhas com
+/// `expiresAt` no passado são descartáveis — o próprio JWT já expirou.
+model RevokedApiToken {
+  jti       String   @id
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+  @@map("revoked_api_tokens")
+}
+
+/// Estado de um comando de automação do plugin `prototype`.
+///
+/// `PENDING` → a casca ainda não entregou o comando à aba; `DELIVERED` → a aba
+/// pegou e está executando; `DONE` → resultado gravado (com sucesso ou não);
+/// `EXPIRED` → estourou o TTL antes de ser resolvido.
+enum PrototypeCommandStatus {
+  PENDING
+  DELIVERED
+  DONE
+  EXPIRED
+}
+
+/// Fila de automação do protótipo: um comando por vez, por (usuário, workspace).
+///
+/// O `workspace` é o token opaco que a casca calcula a partir do caminho local
+/// (16 hex) — o caminho em si nunca sobe. A exclusividade de "um em voo" não é
+/// um índice único porque `DONE` e `EXPIRED` podem repetir à vontade; é a
+/// consulta do `submit`, que recusa enquanto houver um comando vivo.
+model PrototypeCommand {
+  id          String                 @id @default(uuid())
+  userId      String
+  workspace   String
+  op          String
+  args        Json
+  status      PrototypeCommandStatus @default(PENDING)
+  ok          Boolean?
+  result      Json?
+  error       String?
+  createdAt   DateTime               @default(now())
+  deliveredAt DateTime?
+  settledAt   DateTime?
+  shot        PrototypeShot?
+
+  @@index([userId, workspace, status])
+  @@index([userId, workspace, createdAt])
+  @@map("prototype_commands")
+}
+
+/// Screenshot de tela cheia produzido por um comando `screenshot`.
+///
+/// Fica no Postgres como `bytea`: a VPS não tem object storage configurado, e
+/// uma captura PNG cabe folgada no limite de `MAX_SHOT_BYTES`. Some junto com o
+/// comando que a originou.
+model PrototypeShot {
+  id        String           @id @default(uuid())
+  userId    String
+  commandId String           @unique
+  command   PrototypeCommand @relation(fields: [commandId], references: [id], onDelete: Cascade)
+  mime      String
+  bytes     Bytes
+  createdAt DateTime         @default(now())
+
+  @@index([userId, createdAt])
+  @@map("prototype_shots")
+}
+
+/// `console.error`/`warn` e erros de runtime capturados dentro do protótipo.
+///
+/// O `time` é o instante que o shim registrou na página; `createdAt` é quando a
+/// linha chegou aqui. Os dois diferem quando a casca acumula e envia em lote.
+model PrototypeConsoleEntry {
+  id        String   @id @default(uuid())
+  userId    String
+  workspace String
+  level     String
+  text      String
+  time      DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId, workspace, createdAt])
+  @@map("prototype_console_entries")
+}
+
+/// Biblioteca compartilhada de skills, servida ao provider remoto do `dsh`.
+///
+/// Não há coluna de dono, ao contrário dos modelos `Prototype*`: a biblioteca é
+/// uma só para toda a instalação, e a escrita é restrita a `ADMIN` pelas actions
+/// do painel. Quem recorta a LEITURA é o perfil ativo de quem chama: a API serve
+/// a interseção entre as linhas publicadas e as selecionadas em `ProfileSkill`.
+/// Um perfil só estreita — nunca alcança uma linha despublicada.
+///
+/// As colunas SÃO o frontmatter de um `SKILL.md` — `content` guarda só o
+/// Markdown que vem depois dele. Assim o cliente recebe campos já tipados e não
+/// precisa carregar um parser de YAML para ler uma skill.
+model LibrarySkill {
+  id             String   @id @default(uuid())
+  /// Identificador que o modelo escreve em `skill({ name })`: kebab-case,
+  /// `^[a-z0-9]+(?:-[a-z0-9]+)*$`, único em toda a biblioteca.
+  name           String   @unique
+  /// Frase de roteamento que entra no catálogo do modelo. É por ela que o
+  /// modelo decide carregar a skill, então nunca fica vazia.
+  description    String
+  whenToUse      String?
+  /// Corpo Markdown das instruções, sem o bloco de frontmatter.
+  content        String
+  modelInvocable Boolean  @default(true)
+  userInvocable  Boolean  @default(true)
+  /// Despublicar tira a skill de circulação sem apagá-la: a API responde 404,
+  /// e o painel continua mostrando a linha como rascunho.
+  published      Boolean  @default(true)
+  /// Incrementa a cada escrita de conteúdo; o cliente usa para detectar
+  /// mudança sem baixar corpo.
+  revision       Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  profiles ProfileSkill[]
+
+  @@index([published, name])
+  @@map("library_skills")
+}
+
+/// Um perfil de trabalho de um usuário: o recorte de skills e de plugins que um
+/// agente enxerga enquanto roda sob ele.
+///
+/// O recorte é dado da VPS, não arquivo na máquina do cliente: a casca é código
+/// não confiável, e um recorte local seria o cliente escolhendo o próprio
+/// recorte. O token NÃO carrega o perfil — quem sabe qual está ativo é
+/// `User.activeProfileId`, resolvido a cada requisição.
+model Profile {
+  id          String  @id @default(uuid())
+  userId      String
+  user        User    @relation("ProfileOwner", fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  /// Nomes dos plugins que este perfil habilita na casca. Lista de strings e não
+  /// tabela: o conjunto de plugins é propriedade da RELEASE do cliente — a VPS
+  /// não instala nenhum —, então ele mora no código (`KNOWN_PLUGINS` em
+  /// `src/lib/profiles.ts`), como o `KNOWN_OPS` de `plugins/prototype`, e não em
+  /// linhas que poderiam divergir do que o cliente tem instalado.
+  plugins     String[]
+  /// Incrementa a cada escrita. É por ele que a casca detecta que o recorte
+  /// mudou sem comparar as listas inteiras.
+  revision    Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  skills    ProfileSkill[]
+  activeFor User[]         @relation("ActiveProfile")
+
+  @@unique([userId, name])
+  @@map("profiles")
+}
+
+/// Seleção de uma skill da biblioteca por um perfil.
+///
+/// Tabela explícita em vez do m:n implícito do Prisma: o implícito criaria
+/// `_LibrarySkillToProfile`, fora do snake_case que todo `@@map` deste schema
+/// segue, e sem lugar para crescer.
+model ProfileSkill {
+  profileId String
+  profile   Profile      @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  skillId   String
+  skill     LibrarySkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now())
+
+  @@id([profileId, skillId])
+  /// O Postgres não indexa o lado referenciante de uma FK: sem este índice,
+  /// apagar uma `LibrarySkill` faz sequential scan nesta tabela.
+  @@index([skillId])
+  @@map("profile_skills")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(GUEST)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profiles Profile[] @relation("ProfileOwner")
+  /// O perfil sob o qual as chamadas deste usuário são resolvidas. Fica aqui, e
+  /// não numa claim do token, para que trocar de perfil não exija emitir nem
+  /// revogar credencial — os tokens já distribuídos passam a resolver o perfil
+  /// novo na requisição seguinte. Consequência aceita: o perfil ativo é por
+  /// USUÁRIO, não por dispositivo. `SetNull` porque apagar o perfil ativo deve
+  /// deixar o usuário sem perfil (a casca reabre o seletor), não apagar a conta.
+  activeProfileId String?
+  activeProfile   Profile? @relation("ActiveProfile", fields: [activeProfileId], references: [id], onDelete: SetNull)
+
+  @@map("users")
+}

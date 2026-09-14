@@ -25,8 +25,8 @@ const ALL_KINDS = ['dependencies', 'devDependencies', 'optionalDependencies', 'p
 
 /**
  * Workspace areas that never reach a user: repository tooling and gates (the
- * root manifest), test infrastructure, the documentation site, and the native
- * launcher's build workspace. A runtime
+ * root manifest), test infrastructure, and the native launcher's build
+ * workspace. A runtime
  * declaration by anything outside these areas is a disclosure-relevant
  * runtime dependency because any plugin package can be mounted from a user's
  * `cordis.yml`.
@@ -35,7 +35,6 @@ const DEV_ONLY_AREAS = [
   'package.json',
   'packages/test-support/',
   'packages/test-support/client-runtime/',
-  'website/',
   'native/',
 ] as const
 
@@ -77,7 +76,9 @@ const OVERRIDES: Record<string, { license?: string; repo?: string }> = {
   '@modelcontextprotocol/server-filesystem': { license: 'MIT / Apache-2.0', repo: 'https://github.com/modelcontextprotocol/servers' },
   // No repository field in the published manifest.
   'node-addon-require-builtin': { repo: 'https://www.npmjs.com/package/node-addon-require-builtin' },
-  // No `license` field in the published manifest; the tarball's LICENSE.txt is the MIT text.
+  // dsh-ssh-tunnel dependency: the 1.17.0 manifest ships without a `license`
+  // field (license stated in the repo README, MIT).
+  'ssh2': { license: 'MIT', repo: 'https://github.com/mscdex/ssh2' },
 }
 
 /**

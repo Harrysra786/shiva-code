@@ -1,0 +1,52 @@
+# dsh-vps-status bundle patch
+#
+# The `dsh.bundle.patch` layer of the package: installing it into a profile —
+#
+#   dsh plugin --profile web add link:/absolute/path/to/plugins/dsh-vps-status
+#
+# — appends `dsh-vps-status` to that profile's `dsh.profile.bundles`, and the
+# boot merges this single `insert` into the loader entry list.
+#
+# `config.endpoint` has no default on purpose: a status tool pointed at the
+# wrong host is worse than one that refuses to load, so an entry without it
+# fails at composition with a schema error.
+#
+# The host lives in the environment, the path lives here: `$VPS_URL` carries
+# the base URL (origin only) shared by every plugin backed by the same VPS, and
+# this row appends the one path it reads. The boot loads the invoking
+# directory's `.env` and then `$DSH_HOME/.env` (an inherited variable outranks
+# both) before the Loader interpolates the expression below, so a deployment
+# moves by changing one line in `.env`.
+#
+# `new URL` rather than string concatenation: it normalizes a trailing slash on
+# the base, and an unset `$VPS_URL` throws at composition instead of silently
+# producing the string `undefined/api/...`. A `.env` file may not set
+# `DSH_`/`XDG_`-prefixed or other bootstrap names — `VPS_URL` is deliberately
+# outside that space.
+#
+# There is no token to configure. The request is authenticated as whoever
+# signed in through dsh-login, which records the granted session as a
+# credential record this plugin reads once per call — so dsh-login must be
+# mounted in the same profile, and with nobody signed in the tool refuses and
+# says so rather than asking the endpoint anonymously. An `authorization` row
+# under `headers` is rejected at load: that header has one source now.
+#
+# One entry watches one host. To watch several, add a row per host with its own
+# `id`, base variable, and `toolName` (two tools cannot share a name):
+#
+#   - insert:
+#       - id: vps-status-app
+#         name: 'dsh-vps-status'
+#         config:
+#           endpoint: !!js "new URL('/api/plugins/host-info', process.env.APP_VPS_URL).href"
+#           toolName: app_server_status
+#       - id: vps-status-db
+#         name: 'dsh-vps-status'
+#         config:
+#           endpoint: !!js "new URL('/api/plugins/host-info', process.env.DB_VPS_URL).href"
+#           toolName: db_server_status
+- insert:
+    - id: vps-status
+      name: "dsh-vps-status"
+      config:
+        endpoint: !!js "new URL('/api/plugins/host-info', process.env.VPS_URL).href"

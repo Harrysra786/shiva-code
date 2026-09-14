@@ -18,6 +18,7 @@
     "apps/web/tests/scaffold-hermetic.e2e.ts",
     "apps/web/tests/startup-rpc-budget.e2e.ts",
     "apps/web/tests/minimal-preset.snapshot.ts",
+    "apps/web/tests/preset-scope-isolation.snapshot.ts",
     "apps/web/tests/message-feedback-protocol.snapshot.ts",
     "apps/web/tests/preset-migration.snapshot.ts",
     "apps/web/tests/live-interactions.e2e.ts",
@@ -42,7 +43,6 @@
     "apps/web/tests/workspace-new-session-folding.e2e.ts",
     "apps/web/tests/workspace-management.e2e.ts",
     "apps/web/tests/replay-round-trip.e2e.ts",
-    "apps/web/tests/hmr-live.e2e.ts",
     "apps/web/tests/preview-boot.e2e.ts",
     "apps/web/tests/seeded-history.e2e.ts",
     "apps/web/tests/cold-blank-session.e2e.ts",
@@ -110,9 +110,7 @@
     "apps/desktop/tests/**/*.ts",
     "benchmarks/**/*.ts",
     "packages/*/*/tests/**/*.ts",
-    "scripts/**/*.ts",
-    "website/**/*.ts",
-    "website/.vitepress/**/*.ts"
+    "scripts/**/*.ts"
   ],
   // Under packages/client and benchmarks, a test file names the face it covers:
   // `*.client.*` belongs to the Client aggregate, `*.host.spec.ts` to this one. The two
