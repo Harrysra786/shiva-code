@@ -1,4 +1,4 @@
-﻿// dsh-prototype host half: serves the workspace `prototype/` folder over a
+// dsh-prototype host half: serves the workspace `prototype/` folder over a
 // same-origin route (so relative links, css, js and localStorage all work),
 // injects the automation shim into every served HTML page, and connects the tab
 // to the command queue agents use to drive the live browser view.
@@ -17,6 +17,8 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { resolveLoginAuthorization } from 'dsh-login/vps-auth'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { BUNDLED_SHIM_JS, BUNDLED_SHIM_VERSION } from './shim.js'
+export { pageOpsExpression } from './shim.js'
 
 export const inject = ['webServer', 'sessions', 'tools']
 
@@ -191,7 +193,7 @@ async function isDir(p) {
   try { return (await stat(p)).isDirectory() } catch { return false }
 }
 
-// â”€â”€ automation shim â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── automation shim ───────────────────────────────────────────────────────
 // Injected into every served HTML page. Bridges agent commands (relayed by
 // the plugin tab over postMessage) into the live page: clicks, fills, reads,
 // eval, waits - and captures console error/warn plus runtime errors.
@@ -202,93 +204,7 @@ async function isDir(p) {
 // fallback served when no endpoint is configured or the library is unreachable;
 // it is what this plugin can still guarantee offline.
 
-/** Version of the frozen copy below. The library's copy carries its own. */
-const BUNDLED_SHIM_VERSION = '1'
 
-const BUNDLED_SHIM_JS = [
-  '(function(){',
-  "if (window.__DSH_PROTOTYPE_SHIM__) return;",
-  `window.__DSH_PROTOTYPE_SHIM__ = ${JSON.stringify(BUNDLED_SHIM_VERSION)};`,
-  "var buffer = [];",
-  "var MAX = 200;",
-  "function push(level, text) {",
-  "  var entry = { level: level, text: String(text), time: new Date().toISOString() };",
-  "  buffer.push(entry); if (buffer.length > MAX) buffer.shift();",
-  "  try { parent.postMessage({ source: 'dsh-prototype-shim', console: entry }, '*'); } catch (e) {}",
-  "}",
-  "['error','warn'].forEach(function (level) {",
-  "  var original = console[level].bind(console);",
-  "  console[level] = function () {",
-  "    var parts = []; for (var i = 0; i < arguments.length; i++) { try { parts.push(typeof arguments[i] === 'object' ? JSON.stringify(arguments[i]) : String(arguments[i])); } catch (e) { parts.push('[unserializable]'); } }",
-  "    push(level, parts.join(' '));",
-  "    original.apply(null, arguments);",
-  "  };",
-  "});",
-  "window.addEventListener('error', function (e) { push('error', 'Uncaught: ' + e.message + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0)); });",
-  "window.addEventListener('unhandledrejection', function (e) { push('error', 'Unhandled rejection: ' + (e.reason && (e.reason.stack || e.reason.message) || String(e.reason))); });",
-  "function findByText(text) {",
-  "  var nodes = document.querySelectorAll('button, a, [role=button], input[type=button], input[type=submit], label, li, span, div');",
-  "  var needle = String(text).trim().toLowerCase();",
-  "  for (var i = 0; i < nodes.length; i++) {",
-  "    var t = (nodes[i].textContent || '').trim().toLowerCase();",
-  "    if (t && t.indexOf(needle) !== -1 && nodes[i].offsetParent !== null) return nodes[i];",
-  "  }",
-  "  return null;",
-  "}",
-  "function one(el) { el.scrollIntoView({ block: 'center' }); el.click(); return { clicked: true, tag: el.tagName, text: (el.textContent || el.value || '').trim().slice(0, 120) }; }",
-  "function setNative(el, value) {",
-  "  var proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;",
-  "  var setter = Object.getOwnPropertyDescriptor(proto, 'value').set;",
-  "  setter.call(el, value);",
-  "  el.dispatchEvent(new Event('input', { bubbles: true }));",
-  "  el.dispatchEvent(new Event('change', { bubbles: true }));",
-  "}",
-  "var ops = {",
-  "  click: function (a) {",
-  "    var el = a.selector ? document.querySelector(a.selector) : findByText(a.text);",
-  "    if (!el) throw new Error('element not found: ' + (a.selector || a.text));",
-  "    return one(el);",
-  "  },",
-  "  fill: function (a) {",
-  "    var el = document.querySelector(a.selector);",
-  "    if (!el) throw new Error('element not found: ' + a.selector);",
-  "    setNative(el, String(a.value));",
-  "    return { filled: true, value: String(a.value).slice(0, 120) };",
-  "  },",
-  "  read: function (a) {",
-  "    var el = document.querySelector(a.selector);",
-  "    if (!el) throw new Error('element not found: ' + a.selector);",
-  "    if (a.attr) return el.getAttribute(a.attr);",
-  "    return el.value !== undefined && el.tagName !== 'DIV' && el.tagName !== 'SPAN' ? el.value : (el.textContent || '').trim();",
-  "  },",
-  "  eval: function (a) {",
-  "    var fn = new Function('return (' + a.code + ')');",
-  "    return fn();",
-  "  },",
-  "  wait_for: function (a) {",
-  "    var deadline = Date.now() + (a.timeoutMs || 5000);",
-  "    return new Promise(function (resolveP, rejectP) {",
-  "      (function check() {",
-  "        var el = document.querySelector(a.selector);",
-  "        if (el) return resolveP({ found: true });",
-  "        if (Date.now() > deadline) return rejectP(new Error('wait_for timeout: ' + a.selector));",
-  "        setTimeout(check, 120);",
-  "      })();",
-  "    });",
-  "  },",
-  "  console_dump: function () { return { entries: buffer }; },",
-  "};",
-  "window.addEventListener('message', function (e) {",
-  "  var cmd = e.data;",
-  "  if (!cmd || cmd.source !== 'dsh-prototype' || !cmd.id) return;",
-  "  var op = ops[cmd.op];",
-  "  if (!op) { parent.postMessage({ source: 'dsh-prototype-shim', id: cmd.id, ok: false, error: 'unknown op ' + cmd.op }, '*'); return; }",
-  "  Promise.resolve().then(function () { return op(cmd); })",
-  "    .then(function (result) { parent.postMessage({ source: 'dsh-prototype-shim', id: cmd.id, ok: true, result: result, consoleTail: buffer.slice(-20) }, '*'); })",
-  "    .catch(function (err) { parent.postMessage({ source: 'dsh-prototype-shim', id: cmd.id, ok: false, error: String((err && err.message) || err) }, '*'); });",
-  "});",
-  "})();",
-].join('\n')
 
 // -- automation backend ------------------------------------------------------
 // One seam, two implementations, chosen once at load. Both answer the same
@@ -543,7 +459,7 @@ function injectShim(html) {
   return html + tag
 }
 
-// ── agent tool ───────────────────────────────────────────────────────────────
+// -- agent tool ---------------------------------------------------------------
 
 /**
  * The interactive ops the tool submits to the queue and long-polls. Each maps
@@ -634,7 +550,7 @@ function createAutomationTool(ctx, queue) {
   })
 }
 
-// â”€â”€ plugin â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── plugin ────────────────────────────────────────────────────────────────
 
 export function apply(ctx, config = {}) {
   const webServer = ctx.get('webServer')

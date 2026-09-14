@@ -148,6 +148,19 @@ contextBridge.exposeInMainWorld('dshDesktopScreenCapture', {
   capture: (): Promise<string> => ipcRenderer.invoke('screen-capture:shot')
 })
 
+/** Full-scope browser automation: the main process drives a real page embedded in the Browser tab. */
+contextBridge.exposeInMainWorld('dshDesktopWebAgent', {
+  attach: (rect: { x: number; y: number; width: number; height: number }, opsSource: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('web-agent:attach', rect, opsSource),
+  bounds: (rect: { x: number; y: number; width: number; height: number }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('web-agent:bounds', rect),
+  detach: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('web-agent:detach'),
+  navigate: (url: string): Promise<{ ok: boolean; data?: { url?: string; title?: string }; error?: string }> =>
+    ipcRenderer.invoke('web-agent:navigate', url),
+  run: (payload: Record<string, unknown>): Promise<{ ok: boolean; data?: unknown; error?: string }> =>
+    ipcRenderer.invoke('web-agent:run', payload)
+})
+
 /**
  * `[data-dsh-*]` lookups are attribute selectors with no index behind them, so
  * a miss costs a full tree walk. Caching the nodes turns the steady state into

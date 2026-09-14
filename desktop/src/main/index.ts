@@ -17,6 +17,7 @@ import {
   type MessageBoxOptions
 } from 'electron'
 import { appendHarnessLog } from './harness-log'
+import { registerWebAgent } from './web-agent'
 import { extractFailureCause, HarnessRuntime } from './runtime/harness-runtime'
 import { launchDisclaimedUtilityProcess } from './runtime/disclaimed-utility-process'
 import {
@@ -2482,6 +2483,7 @@ async function bootstrap(): Promise<void> {
     const image = await event.sender.capturePage()
     return image.toDataURL()
   })
+  registerWebAgent(() => mainWindow)
   ipcMain.handle('mobile:open-pairing', () => showMobilePairing())
   ipcMain.handle('mobile:status', () => ({ connected: mobileBridge.snapshot().connected }))
   ipcMain.handle('harness:show-log', () => {

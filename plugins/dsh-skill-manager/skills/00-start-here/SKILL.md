@@ -91,6 +91,7 @@ A subagent that has stopped and asked a question sits **idle forever** until the
 - Before any reply to the human that mentions progress, run the stall check: `list_agents` + `job_output`.
 - On any notice that a subagent "paused with a question", answer it or reassign — never ignore it and move on.
 - The `dsh-plugin-heartbeat` vigia wakes you every 5 minutes to run this check; it only helps if you obey the rule.
+- The spawn briefing is the subagent's context budget: point at artifacts, declare the gap, paste the proofs of what is already measured — nothing more. A long briefing is not diligence; it is the measured cause of dead agents.
 
 ## Files: measure by bytes, edit by mapping
 

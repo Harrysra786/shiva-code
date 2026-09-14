@@ -7,9 +7,10 @@
 // half relays one command at a time and stores screenshots under the workspace.
 
 import { spawn } from 'node:child_process'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { pageOpsExpression } from 'dsh-prototype'
 
 export const inject = ['webServer', 'sessions', 'tools']
 
@@ -63,7 +64,7 @@ function openExternal(url) {
 }
 
 /** Queue one command for the client and await its result (bounded). */
-function issue(cmd) {
+function issue(cmd, ttlMs = 15000) {
   const id = String(++seq)
   pending = { id, ...cmd }
   return new Promise((resolveP) => {
@@ -74,7 +75,7 @@ function issue(cmd) {
         resolveP({ ok: false, error: 'timeout — a aba Browser não respondeu (ela está aberta?)' })
       }
       if (pending && pending.id === id) pending = null
-    }, 15000)
+    }, ttlMs)
   })
 }
 
@@ -98,7 +99,31 @@ async function saveShot(workspace, dataUrl) {
 }
 
 /** Ops the agent tool exposes. */
-const BROWSER_OPS = ['open', 'navigate', 'focus', 'screenshot', 'open_external']
+const TAB_OPS = ['open', 'navigate', 'focus', 'screenshot', 'open_external']
+/** Ops that script a real page — they only run in scope "full". */
+const FULL_OPS = ['click', 'fill', 'read', 'eval', 'console', 'wait_for', 'wait']
+const BROWSER_OPS = [...TAB_OPS, ...FULL_OPS]
+
+/**
+ * The permanent gate for full-scope automation: a top-level
+ * `browserFullAccess: true` in the harness settings.yaml. Read on every
+ * attempt, so flipping the flag takes effect without a restart. No flag, no
+ * full scope — the tool refuses with the exact remedy.
+ */
+async function fullAccessEnabled() {
+  const home = process.env.DSH_HOME
+  if (!home) return false
+  try {
+    const text = await readFile(join(home, 'settings.yaml'), 'utf8')
+    return /^browserFullAccess\s*:\s*true\s*$/m.test(text)
+  } catch {
+    return false
+  }
+}
+
+const FULL_ACCESS_HINT =
+  'recusado: automação de página real (scope "full") exige a flag permanente browserFullAccess: true ' +
+  'no settings.yaml do harness (DSH_HOME). Sem approval por sessão de propósito: ou a flag está ligada, ou a op não roda.'
 
 /** Build the agent tool that drives the better-sidebar browser tab. */
 function createTool(ctx) {
@@ -108,12 +133,23 @@ function createTool(ctx) {
       'Drive the sidebar Browser tab and the system browser. ops: open (open the Browser tab, optionally at url) · ' +
       'navigate (open the Browser tab at url) · focus (bring an open Browser tab to the front) · screenshot (capture the app ' +
       'window showing the Browser tab; saved under the workspace and returned as a path) · open_external (open url in the ' +
-      'machine\'s default browser, e.g. an OAuth or dashboard link). The visited page is a cross-origin sandbox: this tool can ' +
-      'navigate and screenshot it, but cannot read its DOM, console or click inside it — for the workspace prototype use ' +
-      'prototype_automation, which has full click/fill/read/eval/console control.',
+      'machine\'s default browser, e.g. an OAuth or dashboard link) · plus FULL-SCOPE page automation: click, fill, read, ' +
+      'eval, console, wait_for, wait — these require scope:"full" and the permanent browserFullAccess: true flag in the ' +
+      'harness settings.yaml; with it you drive ANY real URL like a user (logins included: read credentials from a project ' +
+      'file or env var, never from chat). fill never echoes the value. In scope "full" the page renders live inside the ' +
+      'Browser tab and screenshots capture the page itself. The workspace prototype sandbox (default scope) is unchanged: ' +
+      'for prototype pages use prototype_automation.',
     parameters: {
       op: { type: 'string', required: true, enum: BROWSER_OPS, description: 'Operation to run.' },
       url: { type: 'string', description: 'Target URL (open/navigate/open_external).' },
+      scope: { type: 'string', enum: ['workspace', 'full'], description: 'workspace (default) = tab sandbox as today; full = drive any real URL (needs browserFullAccess: true in settings.yaml).' },
+      selector: { type: 'string', description: 'CSS selector (click/fill/read/wait_for).' },
+      text: { type: 'string', description: 'Visible text to match instead of a selector (click/wait_for).' },
+      value: { type: 'string', description: 'Value to set (fill). Never echoed back.' },
+      code: { type: 'string', description: 'Expression to evaluate in the page (eval).' },
+      attr: { type: 'string', description: 'Attribute to read instead of value/text (read).' },
+      timeoutMs: { type: 'number', description: 'Deadline for wait_for in ms (default 8000, cap 30000).' },
+      ms: { type: 'number', description: 'Milliseconds to sleep (wait, cap 30000).' },
     },
     output: {
       schema: { type: 'json' },
@@ -125,21 +161,46 @@ function createTool(ctx) {
         sessionId: exec?.agent?.session?.header?.id,
       })
       const op = String(args.op)
+      const scope = args.scope === 'full' ? 'full' : 'workspace'
       if (op === 'open_external') {
         const url = String(args.url ?? '')
         if (!url) throw new Error('url obrigatória')
         await openExternal(url)
         return { ok: true, url }
       }
+      if (FULL_OPS.includes(op) && scope !== 'full') {
+        throw new Error(`op "${op}" scripts a real page — pass scope:"full". ${FULL_ACCESS_HINT}`)
+      }
+      if (scope === 'full' && !(await fullAccessEnabled())) {
+        throw new Error(FULL_ACCESS_HINT)
+      }
       if (op === 'screenshot') {
-        const r = await issue({ op: 'screenshot' })
+        const r = await issue({ op: 'screenshot', scope })
         if (!r.ok) return r
+        if (scope === 'full' && r.dataUrl) {
+          // Full scope captures the page itself; same workspace folder.
+          const file = await saveShot(workspace, r.dataUrl)
+          return { ok: true, file, scope }
+        }
         const file = await saveShot(workspace, r.dataUrl)
         return { ok: true, file }
       }
-      return await issue({ op, url: typeof args.url === 'string' ? args.url : undefined })
+      const forward = { op }
+      if (typeof args.url === 'string') forward.url = args.url
+      if (scope === 'full') {
+        forward.scope = 'full'
+        for (const key of ['selector', 'text', 'value', 'code', 'attr', 'timeoutMs', 'ms']) {
+          if (args[key] !== undefined) forward[key] = args[key]
+        }
+      }
+      return await issue(forward, scope === 'full' ? 30000 : 15000)
     },
-    presentCall: (args) => ({ card: 'generic', title: `Browser: ${args.op}`, kind: 'other', rawInput: args }),
+    presentCall: (args) => ({
+      card: 'generic',
+      title: `Browser: ${args.op}`,
+      kind: 'other',
+      rawInput: args.op === 'fill' ? { ...args, value: `***(${String(args.value ?? '').length} chars)` } : args,
+    }),
   })
 }
 
@@ -187,10 +248,19 @@ export function apply(ctx) {
           return json(res, 200, { ok: true, cmd })
         }
         case 'result':
-          settle(payload.id, { ok: payload.ok !== false, dataUrl: payload.dataUrl ?? null, error: payload.error ?? null })
+          settle(payload.id, {
+            ok: payload.ok !== false,
+            dataUrl: payload.dataUrl ?? null,
+            data: payload.data ?? null,
+            error: payload.error ?? null,
+          })
           return json(res, 200, { ok: true })
         case 'status':
           return json(res, 200, { ok: true, shots: SHOTS_FOLDER })
+        case 'ops':
+          // The shared page-ops source (extracted from the prototype shim) for
+          // the desktop's full-scope driver. Fetched once per client load.
+          return json(res, 200, { ok: true, source: pageOpsExpression() })
         default:
           return json(res, 404, { ok: false, error: `unknown method "${method}"` })
       }

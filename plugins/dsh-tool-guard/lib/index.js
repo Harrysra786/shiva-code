@@ -1,26 +1,69 @@
-// dsh-tool-guard host half: enforces two process laws at the tool seam instead
-// of trusting prose. A guard is evaluated after every `tools/pre-execute`
-// listener and is monotonic — once it returns a reason the call is denied and
-// no later listener can turn it back into permission. The rules:
-//   1. the principal agent writes only process artifacts (`mds/` and the
-//      `prototype/` folder); product code is a subagent's job;
-//   2. no agent may write `status: done` into a ticket — Done is the human's
-//      move on the Kanban.
-// Subagents (delegation depth >= 1) are exempt from rule 1: writing code is
-// exactly what they are for.
+// dsh-tool-guard host half: enforces process laws at the tool seam instead of
+// trusting prose. A guard is evaluated after every `tools/pre-execute` listener
+// and is monotonic — once it returns a reason the call is denied and no later
+// listener can turn it back into permission. The laws:
+//
+//   1. the principal agent (depth 0) writes process artifacts (`mds/`, the
+//      `prototype/` folder) and, in fast-fix mode, product code in `src/` and
+//      `public/` (error found in the browser → edit → re-test live). `testes/`
+//      stays qa-only and git commit/push stays with the human;
+//   2. role policies for role-bound subagents: `builder` (fast code) may write
+//      only src/ and public/ and run build/typecheck — the testing is the
+//      principal's job; `qa` (post-human regression) may write only testes/ and
+//      run suites. Neither may spawn subagents; neither may git commit/push;
+//   3. mechanical hooks on every write/edit: encoding integrity (no U+FFFD may
+//      be introduced), the frozen prototype contract, UX-* traceability, and
+//      the single Kanban transition rule (`active` only becomes `in_progress`);
+//   4. every agent is denied `git commit`/`git push` — including the principal;
+//   5. a subagent briefing over ~50 KB is rejected — point at the artifact,
+//      do not paste it;
+//   6. `status: done` is NOT denied: Done is reached at the end of the flow
+//      (human test), so the old blanket prohibition is gone.
+//
+// Role binding: the `subagent` tool accepts `role: "builder" | "qa"`; the tool
+// forwards it as the child's `guardRole` agent option, which this guard reads
+// synchronously. No role → inherited behavior, unchanged.
 
-import { resolve, relative, isAbsolute } from 'node:path'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { basename, isAbsolute, relative, resolve } from 'node:path'
 
 export const inject = ['tools']
 
 /** Tools whose arguments carry a destination path and file text. */
-const GUARDED = new Set(['write', 'edit'])
+const GUARDED_FS = new Set(['write', 'edit'])
 
-/** A frontmatter status of done, the human-only terminal state. */
-const DONE_RE = /^\s*status\s*:\s*done\b/im
+/** Tools that run shell commands (name → argument key holding the command). */
+const SHELL_TOOLS = new Map([
+  ['bash', 'command'],
+  ['pwsh', 'command'],
+  ['terminal_send', 'text'],
+])
+
+/** Git actions no subagent may run. */
+const GIT_DENY_RE = /\bgit\s+(commit|push)\b/i
+
+/** Postgres surface no builder may touch (databases are the deploy path's job). */
+const PG_DENY_RE = /\b(psql|createdb|dropdb|pg_dump|pg_restore|pg_ctl)\b/i
+
+/** External-network commands a fast builder has no business running. */
+const NET_DENY_RE = /\b(curl|wget|ssh|scp|sftp|ftp|telnet|nc|npm\s+(install|i|publish)|pnpm\s+(add|install|publish)|yarn\s+(add|install|publish)|pip3?\s+install)\b/i
 
 /** Folders the principal agent may write inside, relative to the workspace. */
 const DEFAULT_ALLOWED_ROOTS = ['mds', 'prototype']
+
+/** Fast-fix mode: the principal may edit product code directly (fix found in the browser → edit → re-test). */
+const PRINCIPAL_CODE_ROOTS = ['src', 'public']
+
+/** Role-scoped write allowlists, relative to the workspace. */
+const BUILDER_ALLOW_ROOTS = ['src', 'public']
+const QA_ALLOW_ROOTS = ['testes']
+
+/** A subagent briefing may point at artifacts, never paste them. */
+const BRIEFING_MAX_CHARS = 50_000
+
+const UX_REF_RE = /\bUX-[A-Za-z0-9_-]+/g
+const STATUS_RE = /^\s*status\s*:\s*([a-z_]+)\s*$/im
+const FROZEN_AFTER = new Set(['code_test', 'human_test', 'done'])
 
 function log(msg) {
   console.log(`[dsh-tool-guard] ${msg}`)
@@ -46,27 +89,164 @@ function inside(cwd, p, folder) {
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
 }
 
+/** First replacement character in `text`, as a code-unit offset; -1 when none. */
+function firstFFFD(text) {
+  return text.indexOf('\uFFFD')
+}
+
+/** The `status:` frontmatter value of a markdown string, if any. */
+function frontmatterStatus(text) {
+  const cut = text.indexOf('\n---')
+  const head = text.startsWith('---') && cut !== -1 ? text.slice(0, cut) : text.slice(0, 800)
+  const m = STATUS_RE.exec(head)
+  return m ? m[1] : null
+}
+
+/**
+ * The epic folder a path belongs to (`mds/epics/<epic>/…`), or null.
+ * Accepts both separators because clients hand over either.
+ */
+function epicOf(cwd, file) {
+  const abs = resolve(cwd, file)
+  const mdsRoot = resolve(cwd, 'mds')
+  const rel = relative(mdsRoot, abs)
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return null
+  const parts = rel.split(/[\\/]/)
+  if (parts[0] !== 'epics' || parts.length < 2) return null
+  return parts[1]
+}
+
+/** Whether any ticket of the epic has moved past the build loop. */
+function epicIsFrozen(cwd, epic) {
+  const dir = resolve(cwd, 'mds', 'epics', epic, '06-tickets')
+  if (!existsSync(dir)) return false
+  for (const entry of readdirSync(dir)) {
+    if (!entry.endsWith('.md')) continue
+    const status = frontmatterStatus(readFileSync(resolve(dir, entry), 'utf8'))
+    if (status && FROZEN_AFTER.has(status)) return true
+  }
+  return false
+}
+
+/** The `UX-*` ids declared in the epic's frozen prototype contract. */
+function declaredUxIds(cwd, epic) {
+  const file = resolve(cwd, 'mds', 'epics', epic, 'prototype.md')
+  if (!existsSync(file)) return new Set()
+  const ids = new Set()
+  for (const m of readFileSync(file, 'utf8').matchAll(UX_REF_RE)) ids.add(m[0])
+  return ids
+}
+
+/** The denial reason for a write/edit, or undefined to allow. */
+function checkFs(exec, depth, role, allowedRoots, cwd) {
+  const args = (typeof exec.arguments === 'object' && exec.arguments !== null) ? exec.arguments : {}
+  const file = str(args.file_path)
+
+  // Role-scoped write surface first: the allowlist IS the policy.
+  if (role === 'builder') {
+    if (!BUILDER_ALLOW_ROOTS.some((f) => inside(cwd, file, f))) {
+      return `GUARD[builder]: bloqueado — escrita fora de ${BUILDER_ALLOW_ROOTS.join('/, ')} (got ${file || '<empty>'}); permitido só código — o teste é do principal`
+    }
+  } else if (role === 'qa') {
+    if (!inside(cwd, file, QA_ALLOW_ROOTS[0])) {
+      return `GUARD[qa]: bloqueado — escrita fora de testes/ (got ${file || '<empty>'}); qa só escreve testes`
+    }
+  } else if (depth === 0) {
+    // The principal agent's law: process artifacts plus the fast-fix surface
+    // (edit what the browser test exposed, then re-test live). testes/ stays
+    // qa-only, and git stays with the human.
+    if (!allowedRoots.some((folder) => inside(cwd, file, folder)) && !PRINCIPAL_CODE_ROOTS.some((folder) => inside(cwd, file, folder))) {
+      return `Blocked: the principal agent writes only ${[...allowedRoots, ...PRINCIPAL_CODE_ROOTS].join('/, ')}/ — testes/ is qa-only (got ${file || '<empty>'})`
+    }
+  }
+
+  const content = exec.name === 'write' ? str(args.content) : str(args.new_string)
+
+  // Encoding integrity: a file that was clean must never receive U+FFFD.
+  if (content.includes('\uFFFD') && file) {
+    const abs = resolve(cwd, file)
+    if (!existsSync(abs) || !readFileSync(abs, 'utf8').includes('\uFFFD')) {
+      return `GUARD[encoding]: bloqueado e nada foi gravado — o texto introduz U+FFFD (byte UTF-8 inválido) em ${file}; primeiro U+FFFD no offset ${content.indexOf('\uFFFD')}`
+    }
+  }
+
+  const epic = epicOf(cwd, file)
+
+  // The frozen prototype contract: once a ticket leaves the build loop, the
+  // contract stops changing — amendments go to their own artifact.
+  if (epic && basename(file).toLowerCase() === 'prototype.md' && epicIsFrozen(cwd, epic)) {
+    return `GUARD[prototype]: bloqueado — prototype.md do épico está congelado (ticket em code_test ou além); emendas vão em arquivo próprio, nunca no congelado`
+  }
+
+  // Traceability: a ticket may only cite UX-* ids the prototype declares.
+  if (epic && /06-tickets/.test(file) && content) {
+    const cited = new Set(content.match(UX_REF_RE) ?? [])
+    const declared = declaredUxIds(cwd, epic)
+    const missing = [...cited].filter((id) => !declared.has(id))
+    if (missing.length > 0) {
+      return `GUARD[traceability]: bloqueado — ticket cita UX-* inexistente em prototype.md: ${missing.join(', ')}`
+    }
+  }
+
+  // Kanban: the one transition rule — active only becomes in_progress.
+  if (epic && /06-tickets/.test(file)) {
+    const abs = resolve(cwd, file)
+    const oldStatus = existsSync(abs) ? frontmatterStatus(readFileSync(abs, 'utf8')) : null
+    const finalText = exec.name === 'edit'
+      ? readFileSync(abs, 'utf8').replace(str(args.old_string), str(args.new_string))
+      : str(args.content)
+    const newStatus = frontmatterStatus(finalText)
+    if (oldStatus === 'active' && newStatus !== oldStatus && newStatus !== 'in_progress') {
+      return `GUARD[kanban]: bloqueado — ticket 'active' só vira 'in_progress' (tentativa: ${oldStatus} → ${newStatus ?? '<nenhum>'})`
+    }
+  }
+
+  return undefined
+}
+
 /**
  * The guard body: returns a denial reason, or undefined to leave the call
  * unchanged. It is synchronous, as the guard contract requires.
  */
 function check(exec, allowedRoots) {
-  if (!GUARDED.has(exec.name)) return undefined
   const args = (typeof exec.arguments === 'object' && exec.arguments !== null) ? exec.arguments : {}
+  const agent = exec.agent
+  const depth = agent === undefined ? 0 : delegationDepthOf(agent)
+  const role = depth >= 1 && typeof agent?.options?.guardRole === 'string' ? agent.options.guardRole : undefined
+  const cwd = str(agent?.session?.header?.cwd) || process.cwd()
 
-  const text = exec.name === 'write' ? str(args.content) : str(args.new_string)
-  if (DONE_RE.test(text)) {
-    return 'Blocked: "status: done" is the human\'s move on the Kanban — never set it yourself'
+  // Role-scoped tool denylist.
+  if (role === 'builder' && (exec.name === 'browser' || exec.name === 'prototype_automation')) {
+    return 'GUARD[builder]: bloqueado — tool de browser/prototype não é do builder; permitido só código — o teste é do principal'
+  }
+  if ((role === 'builder' || role === 'qa') && exec.name === 'subagent') {
+    return `GUARD[${role}]: bloqueado — subagente não delega (spawn é do principal)`
   }
 
-  const agent = exec.agent
-  if (agent === undefined) return undefined
-  if (delegationDepthOf(agent) !== 0) return undefined
+  // Shell policy: git for every agent (commits belong to the human); the rest
+  // only for the fast builder.
+  if (SHELL_TOOLS.has(exec.name)) {
+    const command = str(args[SHELL_TOOLS.get(exec.name)])
+    if (GIT_DENY_RE.test(command)) {
+      if (depth === 0) {
+        return `GUARD[principal]: bloqueado — git commit/push é do dono do projeto (humano)`
+      }
+      return `GUARD[${role ?? 'subagente'}]: bloqueado — git commit/push é do principal (todos os subagentes)`
+    }
+    if (role === 'builder' && depth >= 1 && (PG_DENY_RE.test(command) || NET_DENY_RE.test(command))) {
+      return `GUARD[builder]: bloqueado — comando com rede externa/Postgres não é do builder; permitido só build e typecheck`
+    }
+  }
 
-  const cwd = str(agent?.session?.header?.cwd) || process.cwd()
-  const file = str(args.file_path)
-  if (allowedRoots.some((folder) => inside(cwd, file, folder))) return undefined
-  return `Blocked: the principal agent writes only ${allowedRoots.join('/ and ')}/ — code is a subagent's job (got ${file || '<empty>'})`
+  // Briefing budget: point at the artifact, never paste it.
+  if (exec.name === 'subagent' && str(args.prompt).length > 50_000) {
+    return `GUARD[briefing]: bloqueado — prompt de subagente com ${str(args.prompt).length} chars (> ~50 KB); aponte o artefato, não cole`
+  }
+
+  if (GUARDED_FS.has(exec.name)) {
+    return checkFs(exec, depth, role, allowedRoots, cwd)
+  }
+  return undefined
 }
 
 export function apply(ctx, config = {}) {
@@ -79,5 +259,8 @@ export function apply(ctx, config = {}) {
   const allowedRoots = Array.isArray(configured) && configured.length > 0 ? configured : DEFAULT_ALLOWED_ROOTS
 
   ctx.effect(() => tools.guard((exec) => check(exec, allowedRoots)), 'dsh-tool-guard: guard')
-  log(`loaded (allowed roots: ${allowedRoots.join(', ')})`)
+  log(`loaded (principal roots: ${allowedRoots.join(', ')})`)
 }
+
+/** Exposed for offline unit proofs only — not part of the plugin contract. */
+export const __test = { check }
