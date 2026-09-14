@@ -6600,16 +6600,16 @@ window.__ModuleLoader__.load({
 			if (tag.textContent !== css) tag.textContent = css;
 		}
 		var UserMenu_module_css_default = {
-			"item": "n3tNSW_item",
-			"collapsed": "n3tNSW_collapsed",
-			"trigger": "n3tNSW_trigger",
-			"headerName": "n3tNSW_headerName",
-			"content": "n3tNSW_content",
 			"name": "n3tNSW_name",
 			"avatar": "n3tNSW_avatar",
-			"header": "n3tNSW_header",
+			"collapsed": "n3tNSW_collapsed",
+			"trigger": "n3tNSW_trigger",
 			"headerDetail": "n3tNSW_headerDetail",
-			"separator": "n3tNSW_separator"
+			"headerName": "n3tNSW_headerName",
+			"separator": "n3tNSW_separator",
+			"content": "n3tNSW_content",
+			"header": "n3tNSW_header",
+			"item": "n3tNSW_item"
 		};
 		//#endregion
 		//#region src/client/UserMenu.tsx
