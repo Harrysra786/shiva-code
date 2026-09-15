@@ -98,28 +98,6 @@
       name: dsh-i18n
     - id: dsh-clock
       name: dsh-clock
-    - id: dsh-shiva-theme
-      name: dsh-shiva-theme
-    - id: dsh-user-menu
-      name: dsh-user-menu
-
-    # Config replicated verbatim from dsh-login's own cordis.patch.yml (the
-    # bundle patch a `dsh.profile.bundles` entry would apply automatically —
-    # this profile never adds one, so the shape is reproduced here instead).
-    # $VPS_URL comes from harness-runtime.ts's buildHarnessSpawnOptions,
-    # defaulting to the production plugin-manager
-    # (https://shivaplugins.grupoinac.com.br) for this shipped build.
-    - id: login
-      name: dsh-login
-      config:
-        endpoint: !!js "new URL('/api/auth/login', process.env.VPS_URL).href"
-        logoutEndpoint: !!js "new URL('/api/auth/logout', process.env.VPS_URL).href"
-        validateEndpoint: !!js "new URL('/api/auth/me', process.env.VPS_URL).href"
-        title: Entrar
-        subtitle: Faça login para usar o Shiva Code.
-        identifierLabel: E-mail
-        passwordLabel: Senha
-        submitLabel: Entrar
 
     - id: mds
       name: dsh-mds
@@ -150,16 +128,6 @@
       name: dsh-railway
     - id: vercel
       name: dsh-vercel
-
-    # `profiles` is never gated: it is the plugin that reads the roster and lets
-    # a person pick, so gating it would remove the only way out of a bad choice.
-    - id: profiles
-      name: dsh-profiles
-      config:
-        profilesEndpoint: !!js "new URL('/api/profiles', process.env.VPS_URL).href"
-        activeEndpoint: !!js "new URL('/api/profiles/active', process.env.VPS_URL).href"
-        specEndpoint: !!js "new URL('/api/plugins/profile', process.env.VPS_URL).href"
-        catalogEndpoint: !!js "new URL('/api/profiles/catalog', process.env.VPS_URL).href"
 
     - id: skill-manager
       name: dsh-skill-manager
