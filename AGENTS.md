@@ -2,6 +2,19 @@
 
 DeepSeek Harness is an all-plugin Cordis agent harness. Read [docs/architecture.md](docs/architecture.md) before changing `packages/`; follow [docs/AGENTS.md](docs/AGENTS.md) for documentation.
 
+## Fork Governance & Architectural Invariants (Option C)
+
+This repository is a buffered fork operated under **Option C: Buffered Fork with Modular, Non-Intrusive Extensions**. Operational guides and upstream sync protocols live in [ARCHITECTURE_STRATEGY.md](ARCHITECTURE_STRATEGY.md).
+
+All autonomous agents and contributors working in this repository MUST obey the following invariants:
+1. **Zero Invasive Edits to Core Dispatch**: Do NOT modify core runtime dispatchers, JSON-RPC loops, or upstream engine packages (`packages/harness-*`, `apps/cli/src/bin.ts`).
+2. **Modular Extension Seams**: All custom features, tools, and UI extensions must be implemented strictly via:
+   - Dynamic Agent Skills in `.agents/skills/<skill-name>/SKILL.md`
+   - Model Context Protocol (MCP) servers
+   - Isolated plugins under `plugins/<feature-name>` or `desktop/packages/<feature-name>`
+3. **Desktop Auto-Update Sovereignty**: The Electron desktop updater must never point to upstream release channels; it must target `Harrysra786/shiva-code` or remain disabled (`publish: never`).
+4. **Upstream Synchronization Integrity**: When synchronizing bug fixes from `upstream` (`INAC-Sistemas/shiva-code`), maintain plugin separation to ensure zero merge conflicts.
+
 ## Plugin library objective
 
 Plugin logic runs on the VPS in [plugin-manager/](plugin-manager/README.md), the plugin library; the client runs only the plugin shell, and `shiva` loads a plugin after the user's API token authenticates.
