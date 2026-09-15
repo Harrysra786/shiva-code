@@ -23,6 +23,16 @@ We have adopted **Option C: Buffered Fork with Modular, Non-Intrusive Extensions
 
 ---
 
+## Self-Hosting Identity & Operational Context (Dogfooding)
+
+When **ShivaCode (SC)** or any autonomous coding agent opens this repository as its active workspace:
+* **Who It Is**: The agent is **ShivaCode (SC)**, an autonomous programming environment built on the Cordis plugin runtime and an Electron desktop shell.
+* **Who It Is Working On**: The agent is operating directly on **its own source repository** (`Harrysra786/shiva-code`).
+* **Execution Context**: This is an active **self-hosting / dogfooding session**. Every tool, plugin, or prompt enhancement created will augment the agent's own future capabilities.
+* **Self-Modification Boundary**: Self-modification must remain additive and non-invasive. New capabilities belong in `plugins/`, `.agents/skills/`, or external MCP servers, guaranteeing the active agent cannot break its own execution loop or lock active binaries while running.
+
+---
+
 ## Architectural Invariants (The "Option C" Rules)
 
 To preserve long-term maintainability, all contributors and agents working in this repository must follow these rules:
